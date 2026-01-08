@@ -19,11 +19,11 @@ public class RiskAnalyzer {
     }
 
     // Checks if current time is between 11 PM and 5 AM
-    public static boolean isLateNight() {
-        Calendar calendar = Calendar.getInstance();
-        int hour = calendar.get(Calendar.HOUR_OF_DAY); // 24-hour format
-
-        // Late night is 23 (11PM) to 5 (5AM)
-        return (hour >= 23 || hour < 5);
-    }
+//    public static boolean isLateNight() {
+//        Calendar calendar = Calendar.getInstance();
+//        int hour = calendar.get(Calendar.HOUR_OF_DAY); // 24-hour format
+//
+//        // Late night is 23 (11PM) to 5 (5AM)
+//        return (hour >= 23 || hour < 5);
+//    }
 }
