@@ -1,22 +1,22 @@
-package com.example.digitaladdiction;
-
-import java.util.Calendar;
-
-public class RiskAnalyzer {
-
-    public enum RiskLevel {
-        LOW, MODERATE, HIGH, SEVERE
-    }
-
-    // Returns risk based on milliseconds played
-    public static RiskLevel calculateRisk(long totalUsageMs) {
-        long hours = totalUsageMs / (1000 * 60 * 60);
-
-        if (hours < 2) return RiskLevel.LOW;
-        if (hours < 4) return RiskLevel.MODERATE;
-        if (hours < 6) return RiskLevel.HIGH;
-        return RiskLevel.SEVERE;
-    }
+//package com.example.digitaladdiction;
+//
+//import java.util.Calendar;
+//
+//public class RiskAnalyzer {
+//
+//    public enum RiskLevel {
+//        LOW, MODERATE, HIGH, SEVERE
+//    }
+//
+//    // Returns risk based on milliseconds played
+//    public static RiskLevel calculateRisk(long totalUsageMs) {
+//        long hours = totalUsageMs / (1000 * 60 * 60);
+//
+//        if (hours < 2) return RiskLevel.LOW;
+//        if (hours < 4) return RiskLevel.MODERATE;
+//        if (hours < 6) return RiskLevel.HIGH;
+//        return RiskLevel.SEVERE;
+//    }
 
     // Checks if current time is between 11 PM and 5 AM
 //    public static boolean isLateNight() {
