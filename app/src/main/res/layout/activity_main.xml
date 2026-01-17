@@ -1,0 +1,89 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:orientation="vertical"
+    android:gravity="center"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:padding="24dp"
+    android:background="#F5F5F5">
+
+    <!-- APP TITLE -->
+    <TextView
+        android:text="Digital Addiction AI"
+        android:textSize="26sp"
+        android:textStyle="bold"
+        android:textColor="#333333"
+        android:layout_marginBottom="8dp"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"/>
+
+    <!-- USER EMAIL -->
+    <TextView
+        android:id="@+id/tvUserEmail"
+        android:text="Loading user info..."
+        android:textSize="14sp"
+        android:textColor="#666666"
+        android:layout_marginBottom="32dp"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"/>
+
+    <!-- DYNAMIC RISK CARD -->
+    <!-- This Layout's background color is changed in Java (Green/Orange/Red) -->
+    <LinearLayout
+        android:id="@+id/layoutRisk"
+        android:orientation="vertical"
+        android:gravity="center"
+        android:background="#4CAF50"
+        android:padding="24dp"
+        android:elevation="6dp"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="40dp">
+
+        <TextView
+            android:text="Current Risk Level"
+            android:textColor="#FFFFFF"
+            android:textSize="16sp"
+            android:alpha="0.9"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"/>
+
+        <TextView
+            android:id="@+id/tvRiskLevel"
+            android:text="ANALYZING..."
+            android:textColor="#FFFFFF"
+            android:textSize="34sp"
+            android:textStyle="bold"
+            android:layout_marginTop="8dp"
+            android:layout_marginBottom="8dp"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"/>
+
+        <TextView
+            android:id="@+id/tvTotalTime"
+            android:text="0h 0m usage today"
+            android:textColor="#FFFFFF"
+            android:textSize="15sp"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"/>
+    </LinearLayout>
+
+    <!-- PARENT CONTROLS -->
+    <Button
+        android:id="@+id/btnParentSettings"
+        android:text="Parent Settings (PIN Required)"
+        android:padding="12dp"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="12dp"/>
+
+    <!-- LOGOUT BUTTON -->
+    <Button
+        android:id="@+id/btnLogout"
+        android:text="Logout"
+        android:backgroundTint="#FF5252"
+        android:textColor="#FFFFFF"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"/>
+
+</LinearLayout>
