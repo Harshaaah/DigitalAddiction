@@ -9,6 +9,7 @@ import android.app.usage.UsageStats;
 import android.app.usage.UsageStatsManager;
 import android.content.Context;
 import android.content.Intent;
+import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
 import android.os.Build;
 import android.os.Handler;
@@ -31,6 +32,8 @@ import java.util.Locale;
 import java.util.Map;
 
 public class TrackingService extends Service {
+    // Add this variable at the top of the class (inside TrackingService)
+    private boolean hasSentDailyLimitAlert = false; // To prevent spamming the "High Risk" alert
 
     private static final String TAG = "TrackingService";
     private static final String CHANNEL_ID = "ForegroundServiceChannel";
@@ -38,26 +41,27 @@ public class TrackingService extends Service {
     private DatabaseReference mDatabase;
     private String currentUserId;
 
-    // Continuous Usage Tracking
-    private Map<String, Long> appSessionStart = new HashMap<>(); // When did they start using this app?
+    // Logic Variables
+    private Map<String, Long> appSessionStart = new HashMap<>();
     private String currentForegroundApp = "";
+    private long lastLateNightAlertTime = 0; // To prevent spamming late night alerts
 
     @Override
     public void onCreate() {
         super.onCreate();
-        // Setup Firebase
+        // 1. Setup Firebase
         if (FirebaseAuth.getInstance().getCurrentUser() != null) {
             currentUserId = FirebaseAuth.getInstance().getCurrentUser().getUid();
             mDatabase = FirebaseDatabase.getInstance().getReference("users").child(currentUserId).child("usage");
         }
 
-        // Ensure Notification Channel exists
+        // 2. Ensure Notification Channel exists
         createNotificationChannel();
     }
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        // 1. Create the persistent notification
+        // 3. Create persistent notification for Foreground Service
         Intent notificationIntent = new Intent(this, MainActivity.class);
         PendingIntent pendingIntent = PendingIntent.getActivity(this, 0, notificationIntent, PendingIntent.FLAG_IMMUTABLE);
 
@@ -68,48 +72,88 @@ public class TrackingService extends Service {
                 .setContentIntent(pendingIntent)
                 .build();
 
-        // 2. Start Service in Foreground (Android won't kill it easily)
         startForeground(1, notification);
 
-        // 3. Start the Loop
+        // 4. Start the Tracking Loop
         handler.post(trackingRunnable);
 
-        return START_STICKY; // If killed, restart automatically
+        return START_STICKY;
     }
 
     private Runnable trackingRunnable = new Runnable() {
         @Override
         public void run() {
             monitorUsage();
-            handler.postDelayed(this, 10000); // Check every 10 seconds for continuous alerts
+            handler.postDelayed(this, 10000); // Run every 10 seconds
         }
     };
 
     private void monitorUsage() {
-        if (currentUserId == null) return;
+        if (currentUserId == null || mDatabase == null) return;
 
         UsageStatsManager usm = (UsageStatsManager) getSystemService(Context.USAGE_STATS_SERVICE);
         long endTime = System.currentTimeMillis();
-        long startTime = endTime - (1000 * 60 * 60 * 24); // 24 hours
+
+        // 1. Calculate Midnight (00:00:00) Today for accurate daily stats
+        java.util.Calendar calendar = java.util.Calendar.getInstance();
+        calendar.set(java.util.Calendar.HOUR_OF_DAY, 0);
+        calendar.set(java.util.Calendar.MINUTE, 0);
+        calendar.set(java.util.Calendar.SECOND, 0);
+        calendar.set(java.util.Calendar.MILLISECOND, 0);
+        long startTime = calendar.getTimeInMillis();
 
         List<UsageStats> stats = usm.queryUsageStats(UsageStatsManager.INTERVAL_DAILY, startTime, endTime);
 
         if (stats != null) {
             long maxTime = 0;
             String topApp = "";
+            long totalDailyUsage = 0; // To track total time for Daily Limit Alert
 
-            // 1. Find which app is CURRENTLY in foreground (based on LastTimeUsed)
+            // A. Loop through stats to find Top App AND Calculate Total Usage
             for (UsageStats usage : stats) {
+                long timeMs = usage.getTotalTimeInForeground();
+
+                // Add to total daily usage (ignoring system apps for accuracy)
+                if (timeMs > 0 && !isSystemApp(getPackageManager(), usage.getPackageName())) {
+                    totalDailyUsage += timeMs;
+                }
+
+                // Find the specific app currently in foreground
                 if (usage.getLastTimeUsed() > maxTime) {
                     maxTime = usage.getLastTimeUsed();
                     topApp = usage.getPackageName();
                 }
             }
 
-            // 2. Continuous Usage Logic
-            if (!topApp.isEmpty() && IsInterestingApp(topApp)) {
-                // If app changed, reset session
+            // B. Check Daily Total Limit (Phase 3 Logic)
+            RiskAnalyzer.RiskLevel risk = RiskAnalyzer.calculateRisk(totalDailyUsage);
+
+            // If Risk is HIGH (e.g. > 4 hours) and we haven't alerted yet today
+            if ((risk == RiskAnalyzer.RiskLevel.HIGH || risk == RiskAnalyzer.RiskLevel.SEVERE)
+                    && !hasSentDailyLimitAlert) {
+
+                NotificationHelper.sendRiskAlert(this, risk.toString());
+                hasSentDailyLimitAlert = true; // Mark as sent to prevent spamming
+            }
+
+            // Reset the alert flag if it's a new day (usage < 1 hour)
+            if (totalDailyUsage < 1000 * 60 * 60) {
+                hasSentDailyLimitAlert = false;
+            }
+
+            // C. Late Night Check (Throttled to once every 15 mins)
+            if (RiskAnalyzer.isLateNight()) {
+                long currentTime = System.currentTimeMillis();
+                if (currentTime - lastLateNightAlertTime > (15 * 60 * 1000)) {
+                    NotificationHelper.sendLateNightAlert(this);
+                    lastLateNightAlertTime = currentTime;
+                }
+            }
+
+            // D. Continuous Usage / Binge Logic
+            if (!topApp.isEmpty() && !isSystemApp(getPackageManager(), topApp)) {
                 if (!topApp.equals(currentForegroundApp)) {
+                    // App switched, reset timer
                     currentForegroundApp = topApp;
                     appSessionStart.put(topApp, System.currentTimeMillis());
                 } else {
@@ -119,30 +163,64 @@ public class TrackingService extends Service {
                         long sessionDuration = System.currentTimeMillis() - start;
 
                         // ALERT: If used for > 1 hour (3600000 ms) continuously
+                        // NOTE: You can change 3600000 to 60000 to test "1 Minute" alerts
                         if (sessionDuration > 3600000) {
-                            NotificationHelper.sendRiskAlert(this, "1 Hour Break Needed! You are using " + getAppName(topApp) + " too long.");
-                            // Reset timer so we don't spam every second (or set a flag)
+
+                            // Calculate Hours and Minutes for the message
+                            long totalMinutes = sessionDuration / 60000;
+                            long hrs = totalMinutes / 60;
+                            long mins = totalMinutes % 60;
+                            String timeString = (hrs > 0 ? hrs + " hr " : "") + mins + " min";
+
+                            NotificationHelper.sendBingeAlert(this, getAppName(topApp), timeString);
+
+                            // Reset timer to avoid spam
                             appSessionStart.put(topApp, System.currentTimeMillis());
                         }
                     }
                 }
             }
 
-            // 3. Upload Data (Standard Phase 2 Logic)
-            // (Only upload every minute to save data, not every 10s)
-            // For simplicity, we just put the upload logic here or call a separate method
+            // E. Upload Data to Firebase
             uploadData(stats);
         }
     }
 
     private void uploadData(List<UsageStats> stats) {
-        // ... (Paste your Phase 2 Upload Logic Here) ...
-        // Ensure you check if Internet is available before uploading
-        // For now, Firebase handles simple offline queuing automatically
+        PackageManager pm = getPackageManager();
+        String dateKey = new SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(new Date());
+
+        for (UsageStats usage : stats) {
+            long timeMs = usage.getTotalTimeInForeground();
+
+            if (timeMs > 1000) {
+                String pkg = usage.getPackageName();
+                if (isSystemApp(pm, pkg)) continue;
+
+                try {
+                    String appName = getAppName(pkg);
+                    String category = CategoryHelper.getCategory(this, pkg);
+                    AppUsageData data = new AppUsageData(pkg, appName, timeMs, category);
+                    String firebaseUrlKey = pkg.replace(".", "_");
+
+                    mDatabase.child(dateKey).child(firebaseUrlKey).setValue(data)
+                            .addOnFailureListener(e -> Log.e(TAG, "Upload failed: " + e.getMessage()));
+
+                } catch (Exception e) {
+                    Log.e(TAG, "Error: " + pkg);
+                }
+            }
+        }
     }
 
-    private boolean IsInterestingApp(String pkg) {
-        return !pkg.equals("com.android.systemui") && !pkg.contains("launcher");
+    private boolean isSystemApp(PackageManager pm, String pkg) {
+        if (pkg.equals("com.google.android.youtube") || pkg.equals("com.android.chrome")) return false;
+        try {
+            ApplicationInfo ai = pm.getApplicationInfo(pkg, 0);
+            return (ai.flags & ApplicationInfo.FLAG_SYSTEM) != 0 && (ai.flags & ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) == 0;
+        } catch (PackageManager.NameNotFoundException e) {
+            return true;
+        }
     }
 
     private String getAppName(String pkg) {
@@ -157,10 +235,10 @@ public class TrackingService extends Service {
             NotificationChannel serviceChannel = new NotificationChannel(
                     CHANNEL_ID,
                     "Foreground Service Channel",
-                    NotificationManager.IMPORTANCE_DEFAULT
+                    NotificationManager.IMPORTANCE_LOW
             );
             NotificationManager manager = getSystemService(NotificationManager.class);
-            manager.createNotificationChannel(serviceChannel);
+            if (manager != null) manager.createNotificationChannel(serviceChannel);
         }
     }
 

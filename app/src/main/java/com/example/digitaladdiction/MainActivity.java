@@ -132,7 +132,16 @@ public class MainActivity extends AppCompatActivity {
         PackageManager pm = getPackageManager();
 
         long endTime = System.currentTimeMillis();
-        long startTime = endTime - (1000 * 60 * 60 * 24); // Last 24 hours
+//        long startTime = endTime - (1000 * 60 * 60 * 24); // Last 24 hours
+        // --- FIX START: Use Calendar to get Midnight Today ---
+        java.util.Calendar calendar = java.util.Calendar.getInstance();
+        calendar.set(java.util.Calendar.HOUR_OF_DAY, 0);
+        calendar.set(java.util.Calendar.MINUTE, 0);
+        calendar.set(java.util.Calendar.SECOND, 0);
+        calendar.set(java.util.Calendar.MILLISECOND, 0);
+        long startTime = calendar.getTimeInMillis();
+        // --- FIX END ---
+
 
         totalDailyUsage = 0;
 
