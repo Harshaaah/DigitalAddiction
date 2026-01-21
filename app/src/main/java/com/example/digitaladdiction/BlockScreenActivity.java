@@ -20,6 +20,7 @@ public class BlockScreenActivity extends AppCompatActivity {
         });
     }
 
+
     // Disable Back Button so they can't sneak back into the app
     @Override
     public void onBackPressed() {

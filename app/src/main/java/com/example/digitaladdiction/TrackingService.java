@@ -95,7 +95,7 @@ public class TrackingService extends Service {
         UsageStatsManager usm = (UsageStatsManager) getSystemService(Context.USAGE_STATS_SERVICE);
         long endTime = System.currentTimeMillis();
 
-        // 1. Calculate Midnight (00:00:00) Today for accurate daily stats
+        // 1. Calculate Midnight (00:00:00) Today
         java.util.Calendar calendar = java.util.Calendar.getInstance();
         calendar.set(java.util.Calendar.HOUR_OF_DAY, 0);
         calendar.set(java.util.Calendar.MINUTE, 0);
@@ -103,13 +103,22 @@ public class TrackingService extends Service {
         calendar.set(java.util.Calendar.MILLISECOND, 0);
         long startTime = calendar.getTimeInMillis();
 
-        // 2. Instant Detection (Using Events to find current app instantly)
+        // 2. Instant Detection (Using Events)
         String instantTopApp = getForegroundApp(usm, endTime);
 
-        // 3. Get Aggregated Time Stats
-        List<UsageStats> stats = usm.queryUsageStats(UsageStatsManager.INTERVAL_DAILY, startTime, endTime);
+        // --- FIX PART 1: Detect App Switch (Even if it is a System App) ---
+        // This MUST happen before we filter out system apps.
+        // If we switch to "Launcher" (Home Screen), we must record that the previous app stopped.
+        if (instantTopApp != null && !instantTopApp.isEmpty()) {
+            if (!instantTopApp.equals(currentForegroundApp)) {
+                currentForegroundApp = instantTopApp; // Update current app
+                appSessionStart.put(currentForegroundApp, System.currentTimeMillis()); // Reset timer
+            }
+        }
+        // ------------------------------------------------------------------
 
-        // 4. NEW: Get Launch Counts (Frequency)
+        // 3. Get Aggregated Stats & Launch Counts
+        List<UsageStats> stats = usm.queryUsageStats(UsageStatsManager.INTERVAL_DAILY, startTime, endTime);
         Map<String, Integer> launchCounts = getLaunchCounts(usm, startTime, endTime);
 
         if (stats != null) {
@@ -123,15 +132,13 @@ public class TrackingService extends Service {
                 }
             }
 
-            // B. Check Daily Total Limit (e.g. > 4 Hours)
+            // B. Check Daily Total Limit
             RiskAnalyzer.RiskLevel risk = RiskAnalyzer.calculateRisk(totalDailyUsage);
-
             if ((risk == RiskAnalyzer.RiskLevel.HIGH || risk == RiskAnalyzer.RiskLevel.SEVERE)
                     && !hasSentDailyLimitAlert) {
                 NotificationHelper.sendRiskAlert(this, risk.toString());
                 hasSentDailyLimitAlert = true;
             }
-
             if (totalDailyUsage < 1000 * 60 * 60) {
                 hasSentDailyLimitAlert = false;
             }
@@ -145,32 +152,41 @@ public class TrackingService extends Service {
                 }
             }
 
-            // D. Binge Logic
-            if (instantTopApp != null && !instantTopApp.isEmpty() && !isSystemApp(getPackageManager(), instantTopApp)) {
-                if (!instantTopApp.equals(currentForegroundApp)) {
-                    currentForegroundApp = instantTopApp;
-                    appSessionStart.put(instantTopApp, System.currentTimeMillis());
-                } else {
-                    Long start = appSessionStart.get(instantTopApp);
-                    if (start != null) {
-                        long sessionDuration = System.currentTimeMillis() - start;
+            // --- FIX PART 2: Binge Logic (Only for USER Apps) ---
+            // If currentForegroundApp is "Launcher", isSystemApp returns true, skipping this block.
+            // This prevents alerts while on the home screen.
+            if (currentForegroundApp != null && !currentForegroundApp.isEmpty()
+                    && !isSystemApp(getPackageManager(), currentForegroundApp)) {
 
-                        // ALERT: 1 Hour Binge Limit (3600000 ms)
-                        // Use 60000 ms for testing 1 minute
-                        if (sessionDuration > 3600000) {
-                            long totalMinutes = sessionDuration / 60000;
-                            long hrs = totalMinutes / 60;
-                            long mins = totalMinutes % 60;
-                            String timeString = (hrs > 0 ? hrs + " hr " : "") + mins + " min";
+                // Phase 4 Hook: Blocking Logic (Optional: Add your Block List check here)
+                if (currentForegroundApp.equals("com.google.android.youtube") || currentForegroundApp.equals("com.instagram.android")) {
+                    Intent blockIntent = new Intent(this, BlockScreenActivity.class);
+                    blockIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+                    startActivity(blockIntent);
+                    return; // Stop processing if blocked
+                }
 
-                            NotificationHelper.sendBingeAlert(this, getAppName(instantTopApp), timeString);
-                            appSessionStart.put(instantTopApp, System.currentTimeMillis());
-                        }
+                Long start = appSessionStart.get(currentForegroundApp);
+                if (start != null) {
+                    long sessionDuration = System.currentTimeMillis() - start;
+
+                    // ALERT: 1 Hour Limit (3600000 ms) - Change to 60000 for testing
+                    if (sessionDuration > 3600000) {
+                        long totalMinutes = sessionDuration / 60000;
+                        long hrs = totalMinutes / 60;
+                        long mins = totalMinutes % 60;
+                        String timeString = (hrs > 0 ? hrs + " hr " : "") + mins + " min";
+
+                        NotificationHelper.sendBingeAlert(this, getAppName(currentForegroundApp), timeString);
+
+                        // Reset timer to avoid spamming the alert every 10 seconds
+                        appSessionStart.put(currentForegroundApp, System.currentTimeMillis());
                     }
                 }
             }
+            // ----------------------------------------------------
 
-            // E. Upload Data (Now includes launch counts)
+            // E. Upload Data
             uploadData(stats, launchCounts);
         }
     }
