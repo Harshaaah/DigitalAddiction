@@ -8,7 +8,7 @@ import androidx.core.app.NotificationCompat;
 
 public class NotificationHelper {
 
-    private static final String CHANNEL_ID = "addiction_alerts";
+    private static final String CHANNEL_ID = "addiction_alerts_v2";
     private static final String CHANNEL_NAME = "Addiction Alerts";
 
     // Unique IDs to ensure notifications don't overwrite each other

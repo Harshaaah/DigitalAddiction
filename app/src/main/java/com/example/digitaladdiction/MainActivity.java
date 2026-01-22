@@ -75,11 +75,9 @@ public class MainActivity extends AppCompatActivity {
 
         tvUserEmail.setText("Account: " + currentUser.getEmail());
 
-        // 4. Set Button Listeners with PIN Protection
+        // 4. Set Button Listeners
         btnLogout.setOnClickListener(v -> showPinDialog(() -> {
-            // Stop service on logout so we don't track the next user
             stopService(new Intent(this, TrackingService.class));
-
             mAuth.signOut();
             startActivity(new Intent(MainActivity.this, LoginActivity.class));
             finish();
@@ -89,15 +87,27 @@ public class MainActivity extends AppCompatActivity {
             Toast.makeText(this, "Parent Settings Unlocked", Toast.LENGTH_SHORT).show();
         }));
 
-        // 5. Check Permissions & Start Service
+        // --- PERMISSION CHECKS (Fixed Order) ---
+
+        // A. Check Overlay Permission FIRST (For Blocking)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            if (!Settings.canDrawOverlays(this)) {
+                Toast.makeText(this, "Please enable 'Display Over Other Apps'", Toast.LENGTH_LONG).show();
+                Intent intent = new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                        android.net.Uri.parse("package:" + getPackageName()));
+                startActivity(intent);
+                // We pause here until user grants it
+                return;
+            }
+        }
+
+        // B. Check Usage Stats Permission SECOND (For Tracking)
         if (!hasUsagePermission()) {
-            Toast.makeText(this, "Please grant usage permission", Toast.LENGTH_LONG).show();
+            Toast.makeText(this, "Please enable 'Usage Access'", Toast.LENGTH_LONG).show();
             startActivity(new Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS));
         } else {
-            // STEP A: Start the Background Service (The Real Tracker)
+            // C. Only start service if permissions are granted
             startSystemTracking();
-
-            // STEP B: Start UI Updates (Just for visuals)
             startUIDashboardUpdates();
         }
     }
@@ -237,5 +247,19 @@ public class MainActivity extends AppCompatActivity {
         super.onDestroy();
         handler.removeCallbacks(uiRunnable);
         // Note: We do NOT stop the Service here. We want it to run even if the app closes.
+    }
+    // Add this method inside MainActivity class
+    private void checkOverlayPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            if (!Settings.canDrawOverlays(this)) {
+                // Send user to the specific settings page
+                Intent intent = new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                        android.net.Uri.parse("package:" + getPackageName()));
+                // Use a request code (e.g., 101)
+                startActivityForResult(intent, 101);
+
+                Toast.makeText(this, "Please allow 'Display over other apps' for Blocking to work", Toast.LENGTH_LONG).show();
+            }
+        }
     }
 }

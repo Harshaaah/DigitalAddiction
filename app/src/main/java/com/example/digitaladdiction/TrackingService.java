@@ -95,7 +95,7 @@ public class TrackingService extends Service {
         UsageStatsManager usm = (UsageStatsManager) getSystemService(Context.USAGE_STATS_SERVICE);
         long endTime = System.currentTimeMillis();
 
-        // 1. Calculate Midnight (00:00:00) Today
+        // 1. Calculate Midnight (00:00:00) Today for accurate daily stats
         java.util.Calendar calendar = java.util.Calendar.getInstance();
         calendar.set(java.util.Calendar.HOUR_OF_DAY, 0);
         calendar.set(java.util.Calendar.MINUTE, 0);
@@ -103,16 +103,16 @@ public class TrackingService extends Service {
         calendar.set(java.util.Calendar.MILLISECOND, 0);
         long startTime = calendar.getTimeInMillis();
 
-        // 2. Instant Detection (Using Events)
+        // 2. Instant Detection (Using Events to find current app instantly)
         String instantTopApp = getForegroundApp(usm, endTime);
 
-        // --- FIX PART 1: Detect App Switch (Even if it is a System App) ---
-        // This MUST happen before we filter out system apps.
+        // --- FIX PART 1: Detect App Switch (Global) ---
+        // This MUST happen before checking if it is a system app.
         // If we switch to "Launcher" (Home Screen), we must record that the previous app stopped.
         if (instantTopApp != null && !instantTopApp.isEmpty()) {
             if (!instantTopApp.equals(currentForegroundApp)) {
-                currentForegroundApp = instantTopApp; // Update current app
-                appSessionStart.put(currentForegroundApp, System.currentTimeMillis()); // Reset timer
+                currentForegroundApp = instantTopApp; // Update current tracked app
+                appSessionStart.put(currentForegroundApp, System.currentTimeMillis()); // Reset timer for new app
             }
         }
         // ------------------------------------------------------------------
@@ -127,18 +127,22 @@ public class TrackingService extends Service {
             // A. Calculate Total Daily Usage
             for (UsageStats usage : stats) {
                 long timeMs = usage.getTotalTimeInForeground();
+                // Add to total daily usage (ignoring system apps for accuracy)
                 if (timeMs > 0 && !isSystemApp(getPackageManager(), usage.getPackageName())) {
                     totalDailyUsage += timeMs;
                 }
             }
 
-            // B. Check Daily Total Limit
+            // B. Check Daily Total Limit (e.g. > 4 Hours)
             RiskAnalyzer.RiskLevel risk = RiskAnalyzer.calculateRisk(totalDailyUsage);
+
             if ((risk == RiskAnalyzer.RiskLevel.HIGH || risk == RiskAnalyzer.RiskLevel.SEVERE)
                     && !hasSentDailyLimitAlert) {
                 NotificationHelper.sendRiskAlert(this, risk.toString());
-                hasSentDailyLimitAlert = true;
+                hasSentDailyLimitAlert = true; // Prevent spamming
             }
+
+            // Reset flag if it's a new day (usage < 1 hour)
             if (totalDailyUsage < 1000 * 60 * 60) {
                 hasSentDailyLimitAlert = false;
             }
@@ -146,31 +150,39 @@ public class TrackingService extends Service {
             // C. Late Night Check
             if (RiskAnalyzer.isLateNight()) {
                 long currentTime = System.currentTimeMillis();
+                // Throttle alerts to once every 15 minutes
                 if (currentTime - lastLateNightAlertTime > (15 * 60 * 1000)) {
                     NotificationHelper.sendLateNightAlert(this);
                     lastLateNightAlertTime = currentTime;
                 }
             }
 
-            // --- FIX PART 2: Binge Logic (Only for USER Apps) ---
-            // If currentForegroundApp is "Launcher", isSystemApp returns true, skipping this block.
-            // This prevents alerts while on the home screen.
+            // --- FIX PART 2: Blocking & Binge Logic (User Apps Only) ---
+            // Only run if current app is a USER app (not Launcher/System)
             if (currentForegroundApp != null && !currentForegroundApp.isEmpty()
                     && !isSystemApp(getPackageManager(), currentForegroundApp)) {
 
-                // Phase 4 Hook: Blocking Logic (Optional: Add your Block List check here)
-                if (currentForegroundApp.equals("com.google.android.youtube") || currentForegroundApp.equals("com.instagram.android")) {
+                // === 🔴 BLOCKING LOGIC START ===
+                // If the app is YouTube or Instagram -> BLOCK IT immediately
+                if (currentForegroundApp.equals("com.google.android.youtube") ||
+                        currentForegroundApp.equals("com.instagram.android")) {
+                    Log.d("BLOCK_TEST", "Detected Blocked App: " + currentForegroundApp);
                     Intent blockIntent = new Intent(this, BlockScreenActivity.class);
+                    // Flags are crucial for Service launching an Activity
                     blockIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
                     startActivity(blockIntent);
-                    return; // Stop processing if blocked
-                }
 
+                    return; // ⛔ STOP HERE! Do not count binge time or upload stats for blocked apps.
+                }
+                // === 🔴 BLOCKING LOGIC END ===
+
+                // Binge Alert Logic
                 Long start = appSessionStart.get(currentForegroundApp);
                 if (start != null) {
                     long sessionDuration = System.currentTimeMillis() - start;
 
-                    // ALERT: 1 Hour Limit (3600000 ms) - Change to 60000 for testing
+                    // ALERT: 1 Hour Binge Limit (3600000 ms)
+                    // (Note: Change to 60000 if you want to test 1 minute)
                     if (sessionDuration > 3600000) {
                         long totalMinutes = sessionDuration / 60000;
                         long hrs = totalMinutes / 60;
@@ -194,8 +206,25 @@ public class TrackingService extends Service {
     // --- HELPER METHODS ---
 
     // 1. Get Instant App (Look back 5 mins)
+//    private String getForegroundApp(UsageStatsManager usm, long endTime) {
+//        long startTime = endTime - (1000 * 60 * 5);
+//        UsageEvents events = usm.queryEvents(startTime, endTime);
+//        UsageEvents.Event event = new UsageEvents.Event();
+//
+//        String currentApp = "";
+//        while (events.hasNextEvent()) {
+//            events.getNextEvent(event);
+//            if (event.getEventType() == UsageEvents.Event.MOVE_TO_FOREGROUND) {
+//                currentApp = event.getPackageName();
+//            }
+//        }
+//        return currentApp;
+//    }
     private String getForegroundApp(UsageStatsManager usm, long endTime) {
-        long startTime = endTime - (1000 * 60 * 5);
+        // FIX: Change 5 minutes to 2 HOURS (1000 * 60 * 60 * 2)
+        // This ensures we find the app even if it was opened a long time ago.
+        long startTime = endTime - (1000 * 60 * 60 * 2);
+
         UsageEvents events = usm.queryEvents(startTime, endTime);
         UsageEvents.Event event = new UsageEvents.Event();
 
@@ -208,8 +237,7 @@ public class TrackingService extends Service {
         }
         return currentApp;
     }
-
-    // 2. NEW: Count how many times apps opened today
+    // 2. Count how many times apps opened today
     private Map<String, Integer> getLaunchCounts(UsageStatsManager usm, long startTime, long endTime) {
         Map<String, Integer> launchCounts = new HashMap<>();
         UsageEvents events = usm.queryEvents(startTime, endTime);
@@ -246,7 +274,7 @@ public class TrackingService extends Service {
                     int count = launchCounts.getOrDefault(pkg, 0);
                     long lastUsed = usage.getLastTimeUsed();
 
-                    // Create object with NEW fields (Requires updated AppUsageData.java)
+                    // Create object with NEW fields
                     AppUsageData data = new AppUsageData(pkg, appName, timeMs, category, count, lastUsed);
 
                     String firebaseUrlKey = pkg.replace(".", "_");
