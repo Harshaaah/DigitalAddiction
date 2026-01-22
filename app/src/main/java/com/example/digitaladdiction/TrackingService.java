@@ -164,8 +164,7 @@ public class TrackingService extends Service {
 
                 // === 🔴 BLOCKING LOGIC START ===
                 // If the app is YouTube or Instagram -> BLOCK IT immediately
-                if (currentForegroundApp.equals("com.google.android.youtube") ||
-                        currentForegroundApp.equals("com.instagram.android")) {
+                if (currentForegroundApp.equals("com.google.android.youtube")) {
                     Log.d("BLOCK_TEST", "Detected Blocked App: " + currentForegroundApp);
                     Intent blockIntent = new Intent(this, BlockScreenActivity.class);
                     // Flags are crucial for Service launching an Activity

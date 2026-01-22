@@ -29,6 +29,13 @@
 
         <activity android:name=".RegisterActivity" />
         <activity android:name=".MainActivity" />
+        <activity android:name=".BlockScreenActivity"
+            android:exported="false"
+            android:theme="@style/Theme.AppCompat.Light.NoActionBar"
+            android:launchMode="singleInstance"
+            android:excludeFromRecents="true"
+            android:taskAffinity=""
+            android:windowSoftInputMode="stateAlwaysHidden"/>
         <!-- NEW: Register the Service -->
         <service android:name=".TrackingService"
             android:enabled="true"
