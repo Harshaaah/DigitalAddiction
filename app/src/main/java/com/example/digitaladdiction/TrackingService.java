@@ -43,22 +43,55 @@ public class TrackingService extends Service {
     // --- LOGIC VARIABLES ---
     private Map<String, Long> appSessionStart = new HashMap<>();
     private String currentForegroundApp = "";
+    // Add this list to store blocked packages dynamically
+    private java.util.List<String> blockedAppsList = new java.util.ArrayList<>();
     private boolean hasSentDailyLimitAlert = false;
     private long lastLateNightAlertTime = 0;
 
     @Override
     public void onCreate() {
         super.onCreate();
+
         // 1. Setup Firebase
         if (FirebaseAuth.getInstance().getCurrentUser() != null) {
             currentUserId = FirebaseAuth.getInstance().getCurrentUser().getUid();
+
+            // Reference to upload usage data
             mDatabase = FirebaseDatabase.getInstance().getReference("users").child(currentUserId).child("usage");
+
+            // --- NEW: Reference to LISTEN for Blocked Apps ---
+            DatabaseReference restrictionsRef = FirebaseDatabase.getInstance().getReference("users").child(currentUserId).child("restrictions");
+
+            // Attach a Real-Time Listener
+            restrictionsRef.addValueEventListener(new com.google.firebase.database.ValueEventListener() {
+                @Override
+                public void onDataChange(com.google.firebase.database.DataSnapshot snapshot) {
+                    // Clear old list
+                    blockedAppsList.clear();
+
+                    // Loop through children (e.g., com_facebook: true)
+                    for (com.google.firebase.database.DataSnapshot child : snapshot.getChildren()) {
+                        // If the value is TRUE (Blocked)
+                        if (Boolean.TRUE.equals(child.getValue(Boolean.class))) {
+                            // Convert Firebase key back to package name (replace _ with .)
+                            // Example: com_instagram_android -> com.instagram.android
+                            String packageName = child.getKey().replace("_", ".");
+                            blockedAppsList.add(packageName);
+                            Log.d(TAG, "REMOTE BLOCK ADDED: " + packageName);
+                        }
+                    }
+                }
+
+                @Override
+                public void onCancelled(com.google.firebase.database.DatabaseError error) {
+                    Log.e(TAG, "Failed to sync restrictions");
+                }
+            });
         }
 
-        // 2. Ensure Notification Channel exists for the Service itself
+        // 2. Ensure Notification Channel exists
         createNotificationChannel();
     }
-
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         // 3. Create persistent notification for Foreground Service
@@ -164,7 +197,10 @@ public class TrackingService extends Service {
 
                 // === 🔴 BLOCKING LOGIC START ===
                 // If the app is YouTube or Instagram -> BLOCK IT immediately
-                if (currentForegroundApp.equals("com.google.android.youtube")) {
+//                if (currentForegroundApp.equals("com.google.android.youtube")) {
+                // NEW DYNAMIC CODE:
+            // Check if the current app exists in our downloaded list
+                if (blockedAppsList.contains(currentForegroundApp)) {
                     Log.d("BLOCK_TEST", "Detected Blocked App: " + currentForegroundApp);
                     Intent blockIntent = new Intent(this, BlockScreenActivity.class);
                     // Flags are crucial for Service launching an Activity
