@@ -39,33 +39,33 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"/>
     <!-- IMPORTANT: Choose Role -->
-    <TextView
-        android:text="Who is using this device?"
-        android:layout_marginTop="10dp"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"/>
+<!--    <TextView-->
+<!--        android:text="Who is using this device?"-->
+<!--        android:layout_marginTop="10dp"-->
+<!--        android:layout_width="wrap_content"-->
+<!--        android:layout_height="wrap_content"/>-->
 
-    <RadioGroup
-        android:id="@+id/rgRole"
-        android:orientation="horizontal"
-        android:layout_marginBottom="20dp"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content">
+<!--    <RadioGroup-->
+<!--        android:id="@+id/rgRole"-->
+<!--        android:orientation="horizontal"-->
+<!--        android:layout_marginBottom="20dp"-->
+<!--        android:layout_width="wrap_content"-->
+<!--        android:layout_height="wrap_content">-->
 
-        <RadioButton
-            android:id="@+id/rbParent"
-            android:text="Parent"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"/>
+<!--        <RadioButton-->
+<!--            android:id="@+id/rbParent"-->
+<!--            android:text="Parent"-->
+<!--            android:layout_width="wrap_content"-->
+<!--            android:layout_height="wrap_content"/>-->
 
-        <RadioButton
-            android:id="@+id/rbChild"
-            android:text="Child"
-            android:checked="true"
-            android:layout_marginLeft="16dp"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"/>
-    </RadioGroup>
+<!--        <RadioButton-->
+<!--            android:id="@+id/rbChild"-->
+<!--            android:text="Child"-->
+<!--            android:checked="true"-->
+<!--            android:layout_marginLeft="16dp"-->
+<!--            android:layout_width="wrap_content"-->
+<!--            android:layout_height="wrap_content"/>-->
+<!--    </RadioGroup>-->
 
     <Button
         android:id="@+id/btnRegister"

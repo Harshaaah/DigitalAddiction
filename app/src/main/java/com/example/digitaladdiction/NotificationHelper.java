@@ -38,7 +38,7 @@ public class NotificationHelper {
                 .setSmallIcon(android.R.drawable.ic_dialog_alert)
                 .setContentTitle("Daily Usage Warning")
                 .setContentText("Risk Level is now " + level + ". Please slow down.")
-                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setPriority(NotificationCompat.PRIORITY_MAX)
                 .setAutoCancel(true);
 
         notify(context, NOTIF_ID_RISK, builder);

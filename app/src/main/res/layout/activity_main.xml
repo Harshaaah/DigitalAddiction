@@ -66,6 +66,15 @@
             android:textSize="15sp"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"/>
+        <!-- Add below the Logout Button -->
+        <Button
+            android:id="@+id/btnWebDashboard"
+            android:text="Open Web Dashboard"
+            android:backgroundTint="#2196F3"
+            android:textColor="#FFFFFF"
+            android:layout_marginTop="12dp"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"/>
     </LinearLayout>
 
     <!-- PARENT CONTROLS -->

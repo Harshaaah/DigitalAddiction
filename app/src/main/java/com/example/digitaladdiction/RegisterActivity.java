@@ -43,7 +43,7 @@ public class RegisterActivity extends AppCompatActivity {
         etEmail = findViewById(R.id.etRegEmail);
         etPassword = findViewById(R.id.etRegPassword);
         etPin = findViewById(R.id.etPin); // Make sure this ID exists in XML
-        rgRole = findViewById(R.id.rgRole);
+//        rgRole = findViewById(R.id.rgRole);
         btnRegister = findViewById(R.id.btnRegister);
         tvLogin = findViewById(R.id.tvBackToLogin);
 
@@ -81,21 +81,14 @@ public class RegisterActivity extends AppCompatActivity {
         mAuth.createUserWithEmailAndPassword(email, password)
                 .addOnCompleteListener(this, task -> {
                     if (task.isSuccessful()) {
-                        // Registration success
                         String uid = mAuth.getCurrentUser().getUid();
-
-                        // Save Data to Realtime Database
                         saveUserToDatabase(uid, email, pin);
 
-                        // Save Role Locally
-                        saveUserRole();
-
-                        Toast.makeText(RegisterActivity.this, "Account Created!", Toast.LENGTH_SHORT).show();
+                        Toast.makeText(RegisterActivity.this, "Device Registered!", Toast.LENGTH_SHORT).show();
                         startActivity(new Intent(RegisterActivity.this, MainActivity.class));
                         finish();
                     } else {
-                        // Registration Failed
-                        String error = task.getException() != null ? task.getException().getMessage() : "Unknown Error";
+                        String error = task.getException() != null ? task.getException().getMessage() : "Error";
                         Toast.makeText(RegisterActivity.this, "Registration Failed: " + error, Toast.LENGTH_LONG).show();
                     }
                 });
@@ -107,7 +100,7 @@ public class RegisterActivity extends AppCompatActivity {
         // 1. Save Profile Info
         Map<String, Object> userMap = new HashMap<>();
         userMap.put("email", email);
-        userMap.put("role", getSelectedRole()); // Save role to Cloud too
+        // Removed "role" field - not needed anymore
 
         // 2. Save Security Settings (PIN)
         Map<String, Object> settingsMap = new HashMap<>();

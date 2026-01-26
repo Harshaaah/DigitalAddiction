@@ -9,6 +9,7 @@ import android.content.Intent;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
@@ -23,11 +24,23 @@ import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
 
+//import com.github.mikephil.charting.charts.PieChart;
+//import com.github.mikephil.charting.data.PieData;
+//import com.github.mikephil.charting.data.PieDataSet;
+//import com.github.mikephil.charting.data.PieEntry;
+//import com.github.mikephil.charting.utils.ColorTemplate;
 import com.google.firebase.auth.FirebaseAuth;
 import com.google.firebase.auth.FirebaseUser;
+import com.google.firebase.database.DataSnapshot;
+import com.google.firebase.database.DatabaseError;
+import com.google.firebase.database.DatabaseReference;
+import com.google.firebase.database.FirebaseDatabase;
+import com.google.firebase.database.ValueEventListener;
 
+import java.util.ArrayList;
 import java.util.List;
 
 public class MainActivity extends AppCompatActivity {
@@ -37,15 +50,20 @@ public class MainActivity extends AppCompatActivity {
 
     // Firebase
     private FirebaseAuth mAuth;
+    private DatabaseReference mDatabase;
 
     // UI Elements
     private TextView tvUserEmail, tvRiskLevel, tvTotalTime;
     private LinearLayout layoutRisk;
-    private Button btnLogout, btnParentSettings;
+    private Button btnLogout, btnParentSettings, btnWebDashboard;
+//    private PieChart pieChart;
 
     // Logic State
     private long totalDailyUsage = 0;
     private RiskAnalyzer.RiskLevel currentRisk = RiskAnalyzer.RiskLevel.LOW;
+
+    // --- FIX: Variable to store the Real Parent PIN ---
+    private String parentPin = "1234"; // Default fallback (will be overwritten by Firebase)
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -65,6 +83,23 @@ public class MainActivity extends AppCompatActivity {
             return;
         }
 
+        // --- NEW: FETCH REAL PIN FROM FIREBASE ---
+        DatabaseReference pinRef = FirebaseDatabase.getInstance().getReference("users")
+                .child(currentUser.getUid()).child("settings").child("pin");
+
+        pinRef.addValueEventListener(new ValueEventListener() {
+            @Override
+            public void onDataChange(@NonNull DataSnapshot snapshot) {
+                if (snapshot.exists()) {
+                    parentPin = snapshot.getValue(String.class); // Update variable with Real PIN
+                    Log.d(TAG, "Parent PIN Synced: " + parentPin);
+                }
+            }
+            @Override
+            public void onCancelled(@NonNull DatabaseError error) { }
+        });
+        // -----------------------------------------
+
         // 3. Bind UI Elements
         tvUserEmail = findViewById(R.id.tvUserEmail);
         tvRiskLevel = findViewById(R.id.tvRiskLevel);
@@ -72,11 +107,14 @@ public class MainActivity extends AppCompatActivity {
         layoutRisk = findViewById(R.id.layoutRisk);
         btnLogout = findViewById(R.id.btnLogout);
         btnParentSettings = findViewById(R.id.btnParentSettings);
+        btnWebDashboard = findViewById(R.id.btnWebDashboard);
+//        pieChart = findViewById(R.id.usagePieChart); // Make sure you added this in XML
 
         tvUserEmail.setText("Account: " + currentUser.getEmail());
 
-        // 4. Set Button Listeners
+        // 4. Set Button Listeners with PIN Protection
         btnLogout.setOnClickListener(v -> showPinDialog(() -> {
+            // Stop service on logout
             stopService(new Intent(this, TrackingService.class));
             mAuth.signOut();
             startActivity(new Intent(MainActivity.this, LoginActivity.class));
@@ -87,32 +125,29 @@ public class MainActivity extends AppCompatActivity {
             Toast.makeText(this, "Parent Settings Unlocked", Toast.LENGTH_SHORT).show();
         }));
 
-        // --- PERMISSION CHECKS (Fixed Order) ---
+        btnWebDashboard.setOnClickListener(v -> showPinDialog(() -> {
+            // Pass UID to website for Auto-Login
+            String uid = mAuth.getCurrentUser().getUid();
+            // REPLACE WITH YOUR REAL HOSTING URL
+            String dashboardUrl = "https://digitaladdictiontracker.web.app/dashboard.html?uid=" + uid;
 
-        // A. Check Overlay Permission FIRST (For Blocking)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            if (!Settings.canDrawOverlays(this)) {
-                Toast.makeText(this, "Please enable 'Display Over Other Apps'", Toast.LENGTH_LONG).show();
-                Intent intent = new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                        android.net.Uri.parse("package:" + getPackageName()));
-                startActivity(intent);
-                // We pause here until user grants it
-                return;
-            }
-        }
+            Intent browserIntent = new Intent(Intent.ACTION_VIEW, Uri.parse(dashboardUrl));
+            startActivity(browserIntent);
+        }));
 
-        // B. Check Usage Stats Permission SECOND (For Tracking)
+        // 5. Check Permissions & Start Service
+        checkOverlayPermission();
+
         if (!hasUsagePermission()) {
             Toast.makeText(this, "Please enable 'Usage Access'", Toast.LENGTH_LONG).show();
             startActivity(new Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS));
         } else {
-            // C. Only start service if permissions are granted
             startSystemTracking();
             startUIDashboardUpdates();
         }
     }
 
-    // --- STEP A: Start the Background Service ---
+    // --- STEP A: Start Background Service ---
     private void startSystemTracking() {
         Intent serviceIntent = new Intent(this, TrackingService.class);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -122,18 +157,16 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    // --- STEP B: Local UI Dashboard Updates ---
+    // --- STEP B: Local UI Updates ---
     private void startUIDashboardUpdates() {
         handler.post(uiRunnable);
     }
 
-    // This Runnable ONLY updates the screen. It does NOT upload to Firebase.
-    // The Service handles uploads now.
     private Runnable uiRunnable = new Runnable() {
         @Override
         public void run() {
             refreshDashboard();
-            handler.postDelayed(this, 10000); // Refresh UI every 10 seconds
+            handler.postDelayed(this, 10000); // 10 sec refresh
         }
     };
 
@@ -141,34 +174,27 @@ public class MainActivity extends AppCompatActivity {
         UsageStatsManager usm = (UsageStatsManager) getSystemService(Context.USAGE_STATS_SERVICE);
         PackageManager pm = getPackageManager();
 
-        long endTime = System.currentTimeMillis();
-//        long startTime = endTime - (1000 * 60 * 60 * 24); // Last 24 hours
-        // --- FIX START: Use Calendar to get Midnight Today ---
+        // Midnight Calculation
         java.util.Calendar calendar = java.util.Calendar.getInstance();
         calendar.set(java.util.Calendar.HOUR_OF_DAY, 0);
         calendar.set(java.util.Calendar.MINUTE, 0);
         calendar.set(java.util.Calendar.SECOND, 0);
         calendar.set(java.util.Calendar.MILLISECOND, 0);
         long startTime = calendar.getTimeInMillis();
-        // --- FIX END ---
-
+        long endTime = System.currentTimeMillis();
 
         totalDailyUsage = 0;
-
         List<UsageStats> stats = usm.queryUsageStats(UsageStatsManager.INTERVAL_DAILY, startTime, endTime);
 
         if (stats != null) {
             for (UsageStats usage : stats) {
                 long timeMs = usage.getTotalTimeInForeground();
-                if (timeMs > 1000) {
-                    // Filter system apps just for the total calculation
-                    if (!isSystemApp(pm, usage.getPackageName())) {
-                        totalDailyUsage += timeMs;
-                    }
+                if (timeMs > 0 && !isSystemApp(pm, usage.getPackageName())) {
+                    totalDailyUsage += timeMs;
                 }
             }
-            // Update the colored card
             updateRiskUI();
+//            updateChartData(stats); // Update Pie Chart
         }
     }
 
@@ -184,33 +210,69 @@ public class MainActivity extends AppCompatActivity {
 
             switch (currentRisk) {
                 case LOW:
-                    layoutRisk.setBackgroundColor(Color.parseColor("#4CAF50")); // Green
+                    layoutRisk.setBackgroundColor(Color.parseColor("#4CAF50"));
                     break;
                 case MODERATE:
-                    layoutRisk.setBackgroundColor(Color.parseColor("#FF9800")); // Orange
+                    layoutRisk.setBackgroundColor(Color.parseColor("#FF9800"));
                     break;
                 case HIGH:
                 case SEVERE:
-                    layoutRisk.setBackgroundColor(Color.parseColor("#F44336")); // Red
+                    layoutRisk.setBackgroundColor(Color.parseColor("#F44336"));
                     break;
             }
         });
     }
 
-    // --- Helpers ---
+    // --- Helper: Pie Chart ---
+//    private void updateChartData(List<UsageStats> stats) {
+//        if (pieChart == null) return; // Safety check
+//
+//        long socialTime = 0;
+//        long gameTime = 0;
+//        long otherTime = 0;
+//        PackageManager pm = getPackageManager();
+//
+//        for (UsageStats usage : stats) {
+//            long time = usage.getTotalTimeInForeground();
+//            if (time > 0 && !isSystemApp(pm, usage.getPackageName())) {
+//                String category = CategoryHelper.getCategory(this, usage.getPackageName());
+//                if (category.equals("Social Media")) socialTime += time;
+//                else if (category.equals("Games")) gameTime += time;
+//                else otherTime += time;
+//            }
+//        }
+//
+//        ArrayList<PieEntry> entries = new ArrayList<>();
+//        if (socialTime > 0) entries.add(new PieEntry(socialTime, "Social"));
+//        if (gameTime > 0) entries.add(new PieEntry(gameTime, "Games"));
+//        if (otherTime > 0) entries.add(new PieEntry(otherTime, "Others"));
+//
+//        if (!entries.isEmpty()) {
+//            PieDataSet dataSet = new PieDataSet(entries, "");
+//            dataSet.setColors(ColorTemplate.MATERIAL_COLORS);
+//            dataSet.setValueTextSize(12f);
+//            PieData data = new PieData(dataSet);
+//            pieChart.setData(data);
+//            pieChart.getDescription().setEnabled(false);
+//            pieChart.invalidate();
+//        }
+//    }
 
+    // --- Helper: PIN Dialog ---
     private void showPinDialog(Runnable onSuccess) {
         AlertDialog.Builder builder = new AlertDialog.Builder(this);
         builder.setTitle("Parent Verification");
-        builder.setMessage("Enter Parent PIN (Default: 1234)");
+        builder.setMessage("Enter Parent PIN");
 
         final EditText input = new EditText(this);
         input.setInputType(InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_VARIATION_PASSWORD);
         builder.setView(input);
 
         builder.setPositiveButton("Unlock", (dialog, which) -> {
-            String pin = input.getText().toString();
-            if (pin.equals("1234")) {
+            String enteredPin = input.getText().toString();
+
+            // --- FIX: Compare against parentPin variable (from Firebase) ---
+            if (enteredPin.equals(parentPin)) {
                 onSuccess.run();
             } else {
                 Toast.makeText(MainActivity.this, "Incorrect PIN", Toast.LENGTH_SHORT).show();
@@ -220,10 +282,26 @@ public class MainActivity extends AppCompatActivity {
         builder.show();
     }
 
-    private boolean isSystemApp(PackageManager pm, String pkg) {
-        if (pkg.equals("com.google.android.youtube") || pkg.equals("com.android.chrome")) {
-            return false;
+    // --- Permissions ---
+    private void checkOverlayPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            if (!Settings.canDrawOverlays(this)) {
+                Toast.makeText(this, "Enable 'Display Over Other Apps' for Blocking", Toast.LENGTH_LONG).show();
+                Intent intent = new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                        Uri.parse("package:" + getPackageName()));
+                startActivity(intent);
+            }
         }
+    }
+
+    private boolean hasUsagePermission() {
+        AppOpsManager appOps = (AppOpsManager) getSystemService(Context.APP_OPS_SERVICE);
+        int mode = appOps.checkOpNoThrow(AppOpsManager.OPSTR_GET_USAGE_STATS, Process.myUid(), getPackageName());
+        return mode == AppOpsManager.MODE_ALLOWED;
+    }
+
+    private boolean isSystemApp(PackageManager pm, String pkg) {
+        if (pkg.equals("com.google.android.youtube") || pkg.equals("com.android.chrome")) return false;
         try {
             ApplicationInfo ai = pm.getApplicationInfo(pkg, 0);
             return (ai.flags & ApplicationInfo.FLAG_SYSTEM) != 0 && (ai.flags & ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) == 0;
@@ -232,34 +310,9 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    private boolean hasUsagePermission() {
-        AppOpsManager appOps = (AppOpsManager) getSystemService(Context.APP_OPS_SERVICE);
-        int mode = appOps.checkOpNoThrow(
-                AppOpsManager.OPSTR_GET_USAGE_STATS,
-                Process.myUid(),
-                getPackageName()
-        );
-        return mode == AppOpsManager.MODE_ALLOWED;
-    }
-
     @Override
     protected void onDestroy() {
         super.onDestroy();
         handler.removeCallbacks(uiRunnable);
-        // Note: We do NOT stop the Service here. We want it to run even if the app closes.
-    }
-    // Add this method inside MainActivity class
-    private void checkOverlayPermission() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            if (!Settings.canDrawOverlays(this)) {
-                // Send user to the specific settings page
-                Intent intent = new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                        android.net.Uri.parse("package:" + getPackageName()));
-                // Use a request code (e.g., 101)
-                startActivityForResult(intent, 101);
-
-                Toast.makeText(this, "Please allow 'Display over other apps' for Blocking to work", Toast.LENGTH_LONG).show();
-            }
-        }
     }
 }
