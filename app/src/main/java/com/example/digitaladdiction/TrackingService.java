@@ -98,13 +98,14 @@ public class TrackingService extends Service {
         }
     };
 
+    // --- CORE MONITORING LOGIC ---
     private void monitorUsage() {
         if (currentUserId == null || mDatabase == null) return;
 
         UsageStatsManager usm = (UsageStatsManager) getSystemService(Context.USAGE_STATS_SERVICE);
         long endTime = System.currentTimeMillis();
 
-        // 1. Calculate Midnight (00:00:00) Today
+        // 1. Calculate Exact Midnight (Start of Today)
         java.util.Calendar calendar = java.util.Calendar.getInstance();
         calendar.set(java.util.Calendar.HOUR_OF_DAY, 0);
         calendar.set(java.util.Calendar.MINUTE, 0);
@@ -112,10 +113,10 @@ public class TrackingService extends Service {
         calendar.set(java.util.Calendar.MILLISECOND, 0);
         long startTime = calendar.getTimeInMillis();
 
-        // 2. Instant Detection
+        // 2. Instant Detection (For Binge/Blocking)
         String instantTopApp = getForegroundApp(usm, endTime);
 
-        // Detect App Switch
+        // Detect App Switch logic...
         if (instantTopApp != null && !instantTopApp.isEmpty()) {
             if (!instantTopApp.equals(currentForegroundApp)) {
                 currentForegroundApp = instantTopApp;
@@ -123,26 +124,33 @@ public class TrackingService extends Service {
             }
         }
 
-        // --- FIX IS HERE ---
-        // OLD (Wrong): usm.queryUsageStats(INTERVAL_DAILY...) -> Returns buckets including yesterday
-        // NEW (Right): usm.queryAndAggregateUsageStats(...) -> Cuts data exactly at midnight
-        java.util.Map<String, android.app.usage.UsageStats> statsMap = usm.queryAndAggregateUsageStats(startTime, endTime);
+        // --- THE FIX: Use queryAndAggregateUsageStats ---
+        // This cuts the stats strictly at 'startTime' (Midnight)
+        Map<String, UsageStats> statsMap = usm.queryAndAggregateUsageStats(startTime, endTime);
+
+        // Get counts
         Map<String, Integer> launchCounts = getLaunchCounts(usm, startTime, endTime);
 
         if (statsMap != null && !statsMap.isEmpty()) {
             long totalDailyUsage = 0;
 
-            // Iterate over the MAP values
-            for (android.app.usage.UsageStats usage : statsMap.values()) {
+            // Iterate over the Map
+            for (UsageStats usage : statsMap.values()) {
+
+                // --- CRITICAL FILTER ---
+                // If the app hasn't been touched AFTER midnight, ignore it completely.
+                // This removes apps used yesterday but not today.
+                if (usage.getLastTimeUsed() < startTime) continue;
+
                 long timeMs = usage.getTotalTimeInForeground();
 
-                // Add to total daily usage (Only if > 0 and NOT a system app)
+                // Add to total (ignoring system apps)
                 if (timeMs > 0 && !isSystemApp(getPackageManager(), usage.getPackageName())) {
                     totalDailyUsage += timeMs;
                 }
             }
 
-            // Risk Analysis
+            // Risk Analysis Logic...
             RiskAnalyzer.RiskLevel risk = RiskAnalyzer.calculateRisk(totalDailyUsage);
             if ((risk == RiskAnalyzer.RiskLevel.HIGH || risk == RiskAnalyzer.RiskLevel.SEVERE)
                     && !hasSentDailyLimitAlert) {
@@ -153,7 +161,7 @@ public class TrackingService extends Service {
                 hasSentDailyLimitAlert = false;
             }
 
-            // Late Night
+            // Late Night Logic...
             if (RiskAnalyzer.isLateNight()) {
                 long currentTime = System.currentTimeMillis();
                 if (currentTime - lastLateNightAlertTime > (15 * 60 * 1000)) {
@@ -162,10 +170,11 @@ public class TrackingService extends Service {
                 }
             }
 
-            // Blocking & Binge Logic
+            // Binge & Blocking Logic...
             if (currentForegroundApp != null && !currentForegroundApp.isEmpty()
                     && !isSystemApp(getPackageManager(), currentForegroundApp)) {
 
+                // Blocking Check
                 if (blockedAppsList.contains(currentForegroundApp)) {
                     Intent blockIntent = new Intent(this, BlockScreenActivity.class);
                     blockIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
@@ -173,22 +182,58 @@ public class TrackingService extends Service {
                     return;
                 }
 
+                // Binge Check
                 Long start = appSessionStart.get(currentForegroundApp);
                 if (start != null) {
                     long sessionDuration = System.currentTimeMillis() - start;
                     if (sessionDuration > 3600000) {
-                        long totalMinutes = sessionDuration / 60000;
-                        long hrs = totalMinutes / 60;
-                        long mins = totalMinutes % 60;
-                        String timeString = (hrs > 0 ? hrs + " hr " : "") + mins + " min";
+                        // ... Send Binge Alert ...
+                        // (Use your existing binge code here)
+                        String timeString = (sessionDuration / 60000) + " mins";
                         NotificationHelper.sendBingeAlert(this, getAppName(currentForegroundApp), timeString);
                         appSessionStart.put(currentForegroundApp, System.currentTimeMillis());
                     }
                 }
             }
 
-            // Upload (Need to update this helper to accept Map)
-            uploadDataMap(statsMap, launchCounts);
+            // E. Upload Data using the MAP method
+            uploadDataMap(statsMap, launchCounts, startTime);
+        }
+    }
+
+    // --- UPDATED UPLOAD METHOD (Use this instead of the List one) ---
+    private void uploadDataMap(Map<String, UsageStats> statsMap, Map<String, Integer> launchCounts, long midnightTime) {
+        if (mDatabase == null) return;
+        PackageManager pm = getPackageManager();
+        String dateKey = new SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(new Date());
+
+        for (UsageStats usage : statsMap.values()) {
+
+            // --- CRITICAL FILTER FOR DATABASE ---
+            // Do not upload if LastTimeUsed is before Midnight
+            if (usage.getLastTimeUsed() < midnightTime) continue;
+
+            long timeMs = usage.getTotalTimeInForeground();
+
+            if (timeMs > 1000) {
+                String pkg = usage.getPackageName();
+                if (isSystemApp(pm, pkg)) continue;
+
+                try {
+                    String appName = getAppName(pkg);
+                    String category = CategoryHelper.getCategory(this, pkg);
+                    int count = launchCounts.getOrDefault(pkg, 0);
+                    long lastUsed = usage.getLastTimeUsed();
+
+                    AppUsageData data = new AppUsageData(pkg, appName, timeMs, category, count, lastUsed);
+                    String firebaseUrlKey = pkg.replace(".", "_");
+
+                    // Upload to Today's Folder
+                    mDatabase.child(dateKey).child(firebaseUrlKey).setValue(data);
+                } catch (Exception e) {
+                    Log.e(TAG, "Upload error: " + e.getMessage());
+                }
+            }
         }
     }
     // --- HELPER METHODS ---
