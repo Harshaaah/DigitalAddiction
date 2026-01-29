@@ -23,6 +23,8 @@ import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
+import java.util.Calendar;
+import java.util.Map;
 
 import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
@@ -170,36 +172,53 @@ public class MainActivity extends AppCompatActivity {
         }
     };
 
+// Inside MainActivity.java
+
     private void refreshDashboard() {
         UsageStatsManager usm = (UsageStatsManager) getSystemService(Context.USAGE_STATS_SERVICE);
         PackageManager pm = getPackageManager();
 
         // 1. Calculate Midnight
-        java.util.Calendar calendar = java.util.Calendar.getInstance();
-        calendar.set(java.util.Calendar.HOUR_OF_DAY, 0);
-        calendar.set(java.util.Calendar.MINUTE, 0);
-        calendar.set(java.util.Calendar.SECOND, 0);
-        calendar.set(java.util.Calendar.MILLISECOND, 0);
+        Calendar calendar = Calendar.getInstance();
+        calendar.set(Calendar.HOUR_OF_DAY, 0);
+        calendar.set(Calendar.MINUTE, 0);
+        calendar.set(Calendar.SECOND, 0);
+        calendar.set(Calendar.MILLISECOND, 0);
         long startTime = calendar.getTimeInMillis();
         long endTime = System.currentTimeMillis();
 
         totalDailyUsage = 0;
 
-        // --- FIX: Use Aggregate Query here too ---
-        java.util.Map<String, UsageStats> statsMap = usm.queryAndAggregateUsageStats(startTime, endTime);
+        // 2. Use Aggregate Query (Fixes Yesterday Bug)
+        Map<String, UsageStats> statsMap = usm.queryAndAggregateUsageStats(startTime, endTime);
 
         if (statsMap != null) {
-            // Convert Map values to a List for the chart function
-            List<UsageStats> statsList = new ArrayList<>(statsMap.values());
-
             for (UsageStats usage : statsMap.values()) {
+                // Timestamp Check (Fixes Yesterday Bug)
+                if (usage.getLastTimeUsed() < startTime) continue;
+
                 long timeMs = usage.getTotalTimeInForeground();
                 if (timeMs > 0 && !isSystemApp(pm, usage.getPackageName())) {
                     totalDailyUsage += timeMs;
                 }
             }
             updateRiskUI();
-//            updateChartData(statsList);
+        }
+    }
+
+    // MAKE SURE TO COPY THE UPDATED isSystemApp from TrackingService to MainActivity too!
+    private boolean isSystemApp(PackageManager pm, String pkg) {
+        if (pkg.contains("youtube") || pkg.contains("chrome") || pkg.contains("whatsapp") ||
+                pkg.contains("instagram") || pkg.contains("facebook")) return false;
+
+        // This line is CRITICAL for MainActivity too
+        if (pkg.contains("launcher") || pkg.contains("home")) return true;
+
+        try {
+            ApplicationInfo ai = pm.getApplicationInfo(pkg, 0);
+            return (ai.flags & ApplicationInfo.FLAG_SYSTEM) != 0 && (ai.flags & ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) == 0;
+        } catch (PackageManager.NameNotFoundException e) {
+            return true;
         }
     }
 
@@ -305,15 +324,15 @@ public class MainActivity extends AppCompatActivity {
         return mode == AppOpsManager.MODE_ALLOWED;
     }
 
-    private boolean isSystemApp(PackageManager pm, String pkg) {
-        if (pkg.equals("com.google.android.youtube") || pkg.equals("com.android.chrome")) return false;
-        try {
-            ApplicationInfo ai = pm.getApplicationInfo(pkg, 0);
-            return (ai.flags & ApplicationInfo.FLAG_SYSTEM) != 0 && (ai.flags & ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) == 0;
-        } catch (PackageManager.NameNotFoundException e) {
-            return true;
-        }
-    }
+//    private boolean isSystemApp(PackageManager pm, String pkg) {
+//        if (pkg.equals("com.google.android.youtube") || pkg.equals("com.android.chrome")) return false;
+//        try {
+//            ApplicationInfo ai = pm.getApplicationInfo(pkg, 0);
+//            return (ai.flags & ApplicationInfo.FLAG_SYSTEM) != 0 && (ai.flags & ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) == 0;
+//        } catch (PackageManager.NameNotFoundException e) {
+//            return true;
+//        }
+//    }
 
     @Override
     protected void onDestroy() {
