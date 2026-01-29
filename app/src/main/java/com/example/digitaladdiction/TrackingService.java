@@ -102,103 +102,96 @@ public class TrackingService extends Service {
     private void monitorUsage() {
         if (currentUserId == null || mDatabase == null) return;
 
-        UsageStatsManager usm = (UsageStatsManager) getSystemService(Context.USAGE_STATS_SERVICE);
-        long endTime = System.currentTimeMillis();
+        UsageStatsManager usm =
+                (UsageStatsManager) getSystemService(Context.USAGE_STATS_SERVICE);
 
-        // 1. Calculate Exact Midnight (Start of Today)
-        java.util.Calendar calendar = java.util.Calendar.getInstance();
-        calendar.set(java.util.Calendar.HOUR_OF_DAY, 0);
-        calendar.set(java.util.Calendar.MINUTE, 0);
-        calendar.set(java.util.Calendar.SECOND, 0);
-        calendar.set(java.util.Calendar.MILLISECOND, 0);
-        long startTime = calendar.getTimeInMillis();
+        long now = System.currentTimeMillis();
 
-        // 2. Instant Detection (For Binge/Blocking)
-        String instantTopApp = getForegroundApp(usm, endTime);
+        // 1️⃣ Get today's midnight
+        java.util.Calendar cal = java.util.Calendar.getInstance();
+        cal.set(java.util.Calendar.HOUR_OF_DAY, 0);
+        cal.set(java.util.Calendar.MINUTE, 0);
+        cal.set(java.util.Calendar.SECOND, 0);
+        cal.set(java.util.Calendar.MILLISECOND, 0);
+        long todayStart = cal.getTimeInMillis();
 
-        // Detect App Switch logic...
-        if (instantTopApp != null && !instantTopApp.isEmpty()) {
-            if (!instantTopApp.equals(currentForegroundApp)) {
-                currentForegroundApp = instantTopApp;
-                appSessionStart.put(currentForegroundApp, System.currentTimeMillis());
-            }
-        }
+        // 2️⃣ Read usage EVENTS (not stats)
+        UsageEvents events = usm.queryEvents(todayStart, now);
+        UsageEvents.Event event = new UsageEvents.Event();
 
-        // --- THE FIX: Use queryAndAggregateUsageStats ---
-        // This cuts the stats strictly at 'startTime' (Midnight)
-        Map<String, UsageStats> statsMap = usm.queryAndAggregateUsageStats(startTime, endTime);
+        Map<String, Long> sessionStartMap = new HashMap<>();
+        long totalTodayUsage = 0;
 
-        // Get counts
-        Map<String, Integer> launchCounts = getLaunchCounts(usm, startTime, endTime);
+        while (events.hasNextEvent()) {
+            events.getNextEvent(event);
 
-        if (statsMap != null && !statsMap.isEmpty()) {
-            long totalDailyUsage = 0;
+            String pkg = event.getPackageName();
+            int type = event.getEventType();
 
-            // Iterate over the Map
-            for (UsageStats usage : statsMap.values()) {
+            if (isSystemApp(getPackageManager(), pkg)) continue;
 
-                // --- CRITICAL FILTER ---
-                // If the app hasn't been touched AFTER midnight, ignore it completely.
-                // This removes apps used yesterday but not today.
-                if (usage.getLastTimeUsed() < startTime) continue;
-
-                long timeMs = usage.getTotalTimeInForeground();
-
-                // Add to total (ignoring system apps)
-                if (timeMs > 0 && !isSystemApp(getPackageManager(), usage.getPackageName())) {
-                    totalDailyUsage += timeMs;
-                }
+            if (type == UsageEvents.Event.MOVE_TO_FOREGROUND) {
+                // App opened
+                sessionStartMap.put(pkg, event.getTimeStamp());
             }
 
-            // Risk Analysis Logic...
-            RiskAnalyzer.RiskLevel risk = RiskAnalyzer.calculateRisk(totalDailyUsage);
-            if ((risk == RiskAnalyzer.RiskLevel.HIGH || risk == RiskAnalyzer.RiskLevel.SEVERE)
-                    && !hasSentDailyLimitAlert) {
-                NotificationHelper.sendRiskAlert(this, risk.toString());
-                hasSentDailyLimitAlert = true;
-            }
-            if (totalDailyUsage < 1000 * 60 * 60) {
-                hasSentDailyLimitAlert = false;
-            }
-
-            // Late Night Logic...
-            if (RiskAnalyzer.isLateNight()) {
-                long currentTime = System.currentTimeMillis();
-                if (currentTime - lastLateNightAlertTime > (15 * 60 * 1000)) {
-                    NotificationHelper.sendLateNightAlert(this);
-                    lastLateNightAlertTime = currentTime;
-                }
-            }
-
-            // Binge & Blocking Logic...
-            if (currentForegroundApp != null && !currentForegroundApp.isEmpty()
-                    && !isSystemApp(getPackageManager(), currentForegroundApp)) {
-
-                // Blocking Check
-                if (blockedAppsList.contains(currentForegroundApp)) {
-                    Intent blockIntent = new Intent(this, BlockScreenActivity.class);
-                    blockIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
-                    startActivity(blockIntent);
-                    return;
-                }
-
-                // Binge Check
-                Long start = appSessionStart.get(currentForegroundApp);
+            if (type == UsageEvents.Event.MOVE_TO_BACKGROUND) {
+                // App closed
+                Long start = sessionStartMap.get(pkg);
                 if (start != null) {
-                    long sessionDuration = System.currentTimeMillis() - start;
-                    if (sessionDuration > 3600000) {
-                        // ... Send Binge Alert ...
-                        // (Use your existing binge code here)
-                        String timeString = (sessionDuration / 60000) + " mins";
-                        NotificationHelper.sendBingeAlert(this, getAppName(currentForegroundApp), timeString);
-                        appSessionStart.put(currentForegroundApp, System.currentTimeMillis());
+                    long sessionTime = event.getTimeStamp() - start;
+
+                    if (sessionTime > 0) {
+                        totalTodayUsage += sessionTime;
                     }
+
+                    sessionStartMap.remove(pkg);
                 }
             }
-
-            // E. Upload Data using the MAP method
-            uploadDataMap(statsMap, launchCounts, startTime);
         }
+
+        // 3️⃣ Risk Calculation (NOW ACCURATE)
+        RiskAnalyzer.RiskLevel risk =
+                RiskAnalyzer.calculateRisk(totalTodayUsage);
+
+        if ((risk == RiskAnalyzer.RiskLevel.HIGH ||
+                risk == RiskAnalyzer.RiskLevel.SEVERE)
+                && !hasSentDailyLimitAlert) {
+
+            NotificationHelper.sendRiskAlert(this, risk.toString());
+            hasSentDailyLimitAlert = true;
+        }
+
+        // Reset alert flag next day
+        if (totalTodayUsage < 60 * 60 * 1000) {
+            hasSentDailyLimitAlert = false;
+        }
+
+        // 4️⃣ Late Night Check
+        if (RiskAnalyzer.isLateNight()) {
+            long current = System.currentTimeMillis();
+            if (current - lastLateNightAlertTime > 15 * 60 * 1000) {
+                NotificationHelper.sendLateNightAlert(this);
+                lastLateNightAlertTime = current;
+            }
+        }
+
+        // 5️⃣ Upload ACCURATE daily usage
+        uploadAccurateUsage(totalTodayUsage);
+    }
+
+    private void uploadAccurateUsage(long totalUsageMs) {
+        if (mDatabase == null) return;
+
+        String dateKey =
+                new SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
+                        .format(new Date());
+
+        Map<String, Object> data = new HashMap<>();
+        data.put("totalUsageMs", totalUsageMs);
+        data.put("timestamp", System.currentTimeMillis());
+
+        mDatabase.child(dateKey).child("summary").setValue(data);
     }
 
     // --- UPDATED UPLOAD METHOD (Use this instead of the List one) ---
