@@ -174,7 +174,7 @@ public class MainActivity extends AppCompatActivity {
         UsageStatsManager usm = (UsageStatsManager) getSystemService(Context.USAGE_STATS_SERVICE);
         PackageManager pm = getPackageManager();
 
-        // Midnight Calculation
+        // 1. Calculate Midnight
         java.util.Calendar calendar = java.util.Calendar.getInstance();
         calendar.set(java.util.Calendar.HOUR_OF_DAY, 0);
         calendar.set(java.util.Calendar.MINUTE, 0);
@@ -184,17 +184,22 @@ public class MainActivity extends AppCompatActivity {
         long endTime = System.currentTimeMillis();
 
         totalDailyUsage = 0;
-        List<UsageStats> stats = usm.queryUsageStats(UsageStatsManager.INTERVAL_DAILY, startTime, endTime);
 
-        if (stats != null) {
-            for (UsageStats usage : stats) {
+        // --- FIX: Use Aggregate Query here too ---
+        java.util.Map<String, UsageStats> statsMap = usm.queryAndAggregateUsageStats(startTime, endTime);
+
+        if (statsMap != null) {
+            // Convert Map values to a List for the chart function
+            List<UsageStats> statsList = new ArrayList<>(statsMap.values());
+
+            for (UsageStats usage : statsMap.values()) {
                 long timeMs = usage.getTotalTimeInForeground();
                 if (timeMs > 0 && !isSystemApp(pm, usage.getPackageName())) {
                     totalDailyUsage += timeMs;
                 }
             }
             updateRiskUI();
-//            updateChartData(stats); // Update Pie Chart
+//            updateChartData(statsList);
         }
     }
 

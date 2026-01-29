@@ -28,7 +28,6 @@ import com.google.firebase.database.FirebaseDatabase;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 
@@ -43,7 +42,6 @@ public class TrackingService extends Service {
     // --- LOGIC VARIABLES ---
     private Map<String, Long> appSessionStart = new HashMap<>();
     private String currentForegroundApp = "";
-    // Add this list to store blocked packages dynamically
     private java.util.List<String> blockedAppsList = new java.util.ArrayList<>();
     private boolean hasSentDailyLimitAlert = false;
     private long lastLateNightAlertTime = 0;
@@ -52,49 +50,31 @@ public class TrackingService extends Service {
     public void onCreate() {
         super.onCreate();
 
-        // 1. Setup Firebase
         if (FirebaseAuth.getInstance().getCurrentUser() != null) {
             currentUserId = FirebaseAuth.getInstance().getCurrentUser().getUid();
-
-            // Reference to upload usage data
             mDatabase = FirebaseDatabase.getInstance().getReference("users").child(currentUserId).child("usage");
 
-            // --- NEW: Reference to LISTEN for Blocked Apps ---
             DatabaseReference restrictionsRef = FirebaseDatabase.getInstance().getReference("users").child(currentUserId).child("restrictions");
-
-            // Attach a Real-Time Listener
             restrictionsRef.addValueEventListener(new com.google.firebase.database.ValueEventListener() {
                 @Override
                 public void onDataChange(com.google.firebase.database.DataSnapshot snapshot) {
-                    // Clear old list
                     blockedAppsList.clear();
-
-                    // Loop through children (e.g., com_facebook: true)
                     for (com.google.firebase.database.DataSnapshot child : snapshot.getChildren()) {
-                        // If the value is TRUE (Blocked)
                         if (Boolean.TRUE.equals(child.getValue(Boolean.class))) {
-                            // Convert Firebase key back to package name (replace _ with .)
-                            // Example: com_instagram_android -> com.instagram.android
                             String packageName = child.getKey().replace("_", ".");
                             blockedAppsList.add(packageName);
-                            Log.d(TAG, "REMOTE BLOCK ADDED: " + packageName);
                         }
                     }
                 }
-
                 @Override
-                public void onCancelled(com.google.firebase.database.DatabaseError error) {
-                    Log.e(TAG, "Failed to sync restrictions");
-                }
+                public void onCancelled(com.google.firebase.database.DatabaseError error) { }
             });
         }
-
-        // 2. Ensure Notification Channel exists
         createNotificationChannel();
     }
+
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        // 3. Create persistent notification for Foreground Service
         Intent notificationIntent = new Intent(this, MainActivity.class);
         PendingIntent pendingIntent = PendingIntent.getActivity(this, 0, notificationIntent, PendingIntent.FLAG_IMMUTABLE);
 
@@ -106,10 +86,7 @@ public class TrackingService extends Service {
                 .build();
 
         startForeground(1, notification);
-
-        // 4. Start the Tracking Loop
         handler.post(trackingRunnable);
-
         return START_STICKY;
     }
 
@@ -121,14 +98,13 @@ public class TrackingService extends Service {
         }
     };
 
-    // --- CORE MONITORING LOGIC ---
     private void monitorUsage() {
         if (currentUserId == null || mDatabase == null) return;
 
         UsageStatsManager usm = (UsageStatsManager) getSystemService(Context.USAGE_STATS_SERVICE);
         long endTime = System.currentTimeMillis();
 
-        // 1. Calculate Midnight (00:00:00) Today for accurate daily stats
+        // 1. Calculate Midnight (00:00:00) Today
         java.util.Calendar calendar = java.util.Calendar.getInstance();
         calendar.set(java.util.Calendar.HOUR_OF_DAY, 0);
         calendar.set(java.util.Calendar.MINUTE, 0);
@@ -136,167 +112,96 @@ public class TrackingService extends Service {
         calendar.set(java.util.Calendar.MILLISECOND, 0);
         long startTime = calendar.getTimeInMillis();
 
-        // 2. Instant Detection (Using Events to find current app instantly)
+        // 2. Instant Detection
         String instantTopApp = getForegroundApp(usm, endTime);
 
-        // --- FIX PART 1: Detect App Switch (Global) ---
-        // This MUST happen before checking if it is a system app.
-        // If we switch to "Launcher" (Home Screen), we must record that the previous app stopped.
+        // Detect App Switch
         if (instantTopApp != null && !instantTopApp.isEmpty()) {
             if (!instantTopApp.equals(currentForegroundApp)) {
-                currentForegroundApp = instantTopApp; // Update current tracked app
-                appSessionStart.put(currentForegroundApp, System.currentTimeMillis()); // Reset timer for new app
+                currentForegroundApp = instantTopApp;
+                appSessionStart.put(currentForegroundApp, System.currentTimeMillis());
             }
         }
-        // ------------------------------------------------------------------
 
-        // 3. Get Aggregated Stats & Launch Counts
-        List<UsageStats> stats = usm.queryUsageStats(UsageStatsManager.INTERVAL_DAILY, startTime, endTime);
+        // --- FIX IS HERE ---
+        // OLD (Wrong): usm.queryUsageStats(INTERVAL_DAILY...) -> Returns buckets including yesterday
+        // NEW (Right): usm.queryAndAggregateUsageStats(...) -> Cuts data exactly at midnight
+        java.util.Map<String, android.app.usage.UsageStats> statsMap = usm.queryAndAggregateUsageStats(startTime, endTime);
         Map<String, Integer> launchCounts = getLaunchCounts(usm, startTime, endTime);
 
-        if (stats != null) {
+        if (statsMap != null && !statsMap.isEmpty()) {
             long totalDailyUsage = 0;
 
-            // A. Calculate Total Daily Usage
-            for (UsageStats usage : stats) {
+            // Iterate over the MAP values
+            for (android.app.usage.UsageStats usage : statsMap.values()) {
                 long timeMs = usage.getTotalTimeInForeground();
-                // Add to total daily usage (ignoring system apps for accuracy)
+
+                // Add to total daily usage (Only if > 0 and NOT a system app)
                 if (timeMs > 0 && !isSystemApp(getPackageManager(), usage.getPackageName())) {
                     totalDailyUsage += timeMs;
                 }
             }
 
-            // B. Check Daily Total Limit (e.g. > 4 Hours)
+            // Risk Analysis
             RiskAnalyzer.RiskLevel risk = RiskAnalyzer.calculateRisk(totalDailyUsage);
-
             if ((risk == RiskAnalyzer.RiskLevel.HIGH || risk == RiskAnalyzer.RiskLevel.SEVERE)
                     && !hasSentDailyLimitAlert) {
                 NotificationHelper.sendRiskAlert(this, risk.toString());
-                hasSentDailyLimitAlert = true; // Prevent spamming
+                hasSentDailyLimitAlert = true;
             }
-
-            // Reset flag if it's a new day (usage < 1 hour)
             if (totalDailyUsage < 1000 * 60 * 60) {
                 hasSentDailyLimitAlert = false;
             }
 
-            // C. Late Night Check
+            // Late Night
             if (RiskAnalyzer.isLateNight()) {
                 long currentTime = System.currentTimeMillis();
-                // Throttle alerts to once every 15 minutes
                 if (currentTime - lastLateNightAlertTime > (15 * 60 * 1000)) {
                     NotificationHelper.sendLateNightAlert(this);
                     lastLateNightAlertTime = currentTime;
                 }
             }
 
-            // --- FIX PART 2: Blocking & Binge Logic (User Apps Only) ---
-            // Only run if current app is a USER app (not Launcher/System)
+            // Blocking & Binge Logic
             if (currentForegroundApp != null && !currentForegroundApp.isEmpty()
                     && !isSystemApp(getPackageManager(), currentForegroundApp)) {
 
-                // === 🔴 BLOCKING LOGIC START ===
-                // If the app is YouTube or Instagram -> BLOCK IT immediately
-//                if (currentForegroundApp.equals("com.google.android.youtube")) {
-                // NEW DYNAMIC CODE:
-            // Check if the current app exists in our downloaded list
                 if (blockedAppsList.contains(currentForegroundApp)) {
-                    Log.d("BLOCK_TEST", "Detected Blocked App: " + currentForegroundApp);
                     Intent blockIntent = new Intent(this, BlockScreenActivity.class);
-                    // Flags are crucial for Service launching an Activity
                     blockIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
                     startActivity(blockIntent);
-
-                    return; // ⛔ STOP HERE! Do not count binge time or upload stats for blocked apps.
+                    return;
                 }
-                // === 🔴 BLOCKING LOGIC END ===
 
-                // Binge Alert Logic
                 Long start = appSessionStart.get(currentForegroundApp);
                 if (start != null) {
                     long sessionDuration = System.currentTimeMillis() - start;
-
-                    // ALERT: 1 Hour Binge Limit (3600000 ms)
-                    // (Note: Change to 60000 if you want to test 1 minute)
                     if (sessionDuration > 3600000) {
                         long totalMinutes = sessionDuration / 60000;
                         long hrs = totalMinutes / 60;
                         long mins = totalMinutes % 60;
                         String timeString = (hrs > 0 ? hrs + " hr " : "") + mins + " min";
-
                         NotificationHelper.sendBingeAlert(this, getAppName(currentForegroundApp), timeString);
-
-                        // Reset timer to avoid spamming the alert every 10 seconds
                         appSessionStart.put(currentForegroundApp, System.currentTimeMillis());
                     }
                 }
             }
-            // ----------------------------------------------------
 
-            // E. Upload Data
-            uploadData(stats, launchCounts);
+            // Upload (Need to update this helper to accept Map)
+            uploadDataMap(statsMap, launchCounts);
         }
     }
-
     // --- HELPER METHODS ---
-
-    // 1. Get Instant App (Look back 5 mins)
-//    private String getForegroundApp(UsageStatsManager usm, long endTime) {
-//        long startTime = endTime - (1000 * 60 * 5);
-//        UsageEvents events = usm.queryEvents(startTime, endTime);
-//        UsageEvents.Event event = new UsageEvents.Event();
-//
-//        String currentApp = "";
-//        while (events.hasNextEvent()) {
-//            events.getNextEvent(event);
-//            if (event.getEventType() == UsageEvents.Event.MOVE_TO_FOREGROUND) {
-//                currentApp = event.getPackageName();
-//            }
-//        }
-//        return currentApp;
-//    }
-    private String getForegroundApp(UsageStatsManager usm, long endTime) {
-        // FIX: Change 5 minutes to 2 HOURS (1000 * 60 * 60 * 2)
-        // This ensures we find the app even if it was opened a long time ago.
-        long startTime = endTime - (1000 * 60 * 60 * 2);
-
-        UsageEvents events = usm.queryEvents(startTime, endTime);
-        UsageEvents.Event event = new UsageEvents.Event();
-
-        String currentApp = "";
-        while (events.hasNextEvent()) {
-            events.getNextEvent(event);
-            if (event.getEventType() == UsageEvents.Event.MOVE_TO_FOREGROUND) {
-                currentApp = event.getPackageName();
-            }
-        }
-        return currentApp;
-    }
-    // 2. Count how many times apps opened today
-    private Map<String, Integer> getLaunchCounts(UsageStatsManager usm, long startTime, long endTime) {
-        Map<String, Integer> launchCounts = new HashMap<>();
-        UsageEvents events = usm.queryEvents(startTime, endTime);
-        UsageEvents.Event event = new UsageEvents.Event();
-
-        while (events.hasNextEvent()) {
-            events.getNextEvent(event);
-            if (event.getEventType() == UsageEvents.Event.MOVE_TO_FOREGROUND) {
-                String pkg = event.getPackageName();
-                int count = launchCounts.getOrDefault(pkg, 0);
-                launchCounts.put(pkg, count + 1);
-            }
-        }
-        return launchCounts;
-    }
-
-    // 3. Updated Upload Data
-    private void uploadData(List<UsageStats> stats, Map<String, Integer> launchCounts) {
+    // NEW Upload Method for Map data
+    private void uploadDataMap(java.util.Map<String, android.app.usage.UsageStats> statsMap, Map<String, Integer> launchCounts) {
         if (mDatabase == null) return;
         PackageManager pm = getPackageManager();
         String dateKey = new SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(new Date());
 
-        for (UsageStats usage : stats) {
+        for (android.app.usage.UsageStats usage : statsMap.values()) {
             long timeMs = usage.getTotalTimeInForeground();
+
+            // Filter > 1 sec and NOT System Apps
             if (timeMs > 1000) {
                 String pkg = usage.getPackageName();
                 if (isSystemApp(pm, pkg)) continue;
@@ -304,14 +209,10 @@ public class TrackingService extends Service {
                 try {
                     String appName = getAppName(pkg);
                     String category = CategoryHelper.getCategory(this, pkg);
-
-                    // Get Frequency & Time
                     int count = launchCounts.getOrDefault(pkg, 0);
                     long lastUsed = usage.getLastTimeUsed();
 
-                    // Create object with NEW fields
                     AppUsageData data = new AppUsageData(pkg, appName, timeMs, category, count, lastUsed);
-
                     String firebaseUrlKey = pkg.replace(".", "_");
                     mDatabase.child(dateKey).child(firebaseUrlKey).setValue(data);
                 } catch (Exception e) {
@@ -321,23 +222,107 @@ public class TrackingService extends Service {
         }
     }
 
-    private boolean isSystemApp(PackageManager pm, String pkg) {
-        if (pkg.equals("com.google.android.youtube") || pkg.equals("com.android.chrome")) return false;
-        try {
-            ApplicationInfo ai = pm.getApplicationInfo(pkg, 0);
-            return (ai.flags & ApplicationInfo.FLAG_SYSTEM) != 0 && (ai.flags & ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) == 0;
-        } catch (PackageManager.NameNotFoundException e) {
-            return true;
+    // Updated uploadData to accept Map<String, UsageStats>
+    private void uploadData(Map<String, UsageStats> statsMap, Map<String, Integer> launchCounts) {
+        if (mDatabase == null) return;
+        PackageManager pm = getPackageManager();
+        String dateKey = new SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(new Date());
+
+        for (UsageStats usage : statsMap.values()) {
+            long timeMs = usage.getTotalTimeInForeground();
+
+            // Filter > 1 sec usage
+            if (timeMs > 1000) {
+                String pkg = usage.getPackageName();
+                if (isSystemApp(pm, pkg)) continue;
+
+                try {
+                    String appName = getAppName(pkg);
+                    String category = CategoryHelper.getCategory(this, pkg);
+                    int count = launchCounts.getOrDefault(pkg, 0);
+                    long lastUsed = usage.getLastTimeUsed();
+
+                    AppUsageData data = new AppUsageData(pkg, appName, timeMs, category, count, lastUsed);
+                    String firebaseUrlKey = pkg.replace(".", "_");
+                    mDatabase.child(dateKey).child(firebaseUrlKey).setValue(data);
+                } catch (Exception e) {
+                    Log.e(TAG, "Upload error: " + e.getMessage());
+                }
+            }
         }
     }
+
+    private String getForegroundApp(UsageStatsManager usm, long endTime) {
+        long startTime = endTime - (1000 * 60 * 60 * 2);
+        UsageEvents events = usm.queryEvents(startTime, endTime);
+        UsageEvents.Event event = new UsageEvents.Event();
+        String currentApp = "";
+        while (events.hasNextEvent()) {
+            events.getNextEvent(event);
+            if (event.getEventType() == UsageEvents.Event.MOVE_TO_FOREGROUND) {
+                currentApp = event.getPackageName();
+            }
+        }
+        return currentApp;
+    }
+
+    private Map<String, Integer> getLaunchCounts(UsageStatsManager usm, long startTime, long endTime) {
+        Map<String, Integer> launchCounts = new HashMap<>();
+        UsageEvents events = usm.queryEvents(startTime, endTime);
+        UsageEvents.Event event = new UsageEvents.Event();
+        while (events.hasNextEvent()) {
+            events.getNextEvent(event);
+            if (event.getEventType() == UsageEvents.Event.MOVE_TO_FOREGROUND) {
+                String pkg = event.getPackageName();
+                launchCounts.put(pkg, launchCounts.getOrDefault(pkg, 0) + 1);
+            }
+        }
+        return launchCounts;
+    }
+
+//    private boolean isSystemApp(PackageManager pm, String pkg) {
+//        if (pkg.contains("youtube") || pkg.contains("chrome") || pkg.contains("whatsapp") ||
+//                pkg.contains("instagram") || pkg.contains("facebook") || pkg.contains("snapchat")) {
+//            return false;
+//        }
+//        // Exclude Launchers explicitly to avoid counting Home Screen time
+//        if (pkg.contains("launcher") || pkg.contains("home")) {
+//            return true;
+//        }
+//        try {
+//            ApplicationInfo ai = pm.getApplicationInfo(pkg, 0);
+//            return (ai.flags & ApplicationInfo.FLAG_SYSTEM) != 0 && (ai.flags & ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) == 0;
+//        } catch (PackageManager.NameNotFoundException e) {
+//            return true;
+//        }
+//    }
+private boolean isSystemApp(PackageManager pm, String pkg) {
+    // Whitelist...
+    if (pkg.contains("youtube") || pkg.contains("chrome") || pkg.contains("whatsapp") ||
+            pkg.contains("instagram") || pkg.contains("facebook") || pkg.contains("snapchat")) {
+        return false;
+    }
+
+    // --- CRITICAL FILTER FOR HOME SCREEN ---
+    // If this is missing, "Phone Idle" counts as "Phone Usage"
+    if (pkg.contains("launcher") || pkg.contains("home") || pkg.contains("android.systemui")) {
+        return true;
+    }
+    // ---------------------------------------
+
+    try {
+        ApplicationInfo ai = pm.getApplicationInfo(pkg, 0);
+        return (ai.flags & ApplicationInfo.FLAG_SYSTEM) != 0 && (ai.flags & ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) == 0;
+    } catch (PackageManager.NameNotFoundException e) {
+        return true;
+    }
+}
 
     private String getAppName(String pkg) {
         try {
             PackageManager pm = getPackageManager();
             return (String) pm.getApplicationLabel(pm.getApplicationInfo(pkg, 0));
-        } catch (Exception e) {
-            return pkg;
-        }
+        } catch (Exception e) { return pkg; }
     }
 
     private void createNotificationChannel() {
@@ -360,7 +345,5 @@ public class TrackingService extends Service {
 
     @Nullable
     @Override
-    public IBinder onBind(Intent intent) {
-        return null;
-    }
+    public IBinder onBind(Intent intent) { return null; }
 }
