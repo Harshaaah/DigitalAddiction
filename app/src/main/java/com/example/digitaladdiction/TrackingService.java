@@ -100,79 +100,76 @@ public class TrackingService extends Service {
         }
     };
 
+    // --- UPDATED MONITOR USAGE ---
     private void monitorUsage() {
         if (currentUserId == null || mDatabase == null) return;
 
         UsageStatsManager usm = (UsageStatsManager) getSystemService(Context.USAGE_STATS_SERVICE);
         long endTime = System.currentTimeMillis();
 
-        // 1. Calculate Midnight (00:00:00 Today)
-        Calendar calendar = Calendar.getInstance();
-        calendar.set(Calendar.HOUR_OF_DAY, 0);
-        calendar.set(Calendar.MINUTE, 0);
-        calendar.set(Calendar.SECOND, 0);
-        calendar.set(Calendar.MILLISECOND, 0);
+        // 1. Calculate Midnight
+        java.util.Calendar calendar = java.util.Calendar.getInstance();
+        calendar.set(java.util.Calendar.HOUR_OF_DAY, 0);
+        calendar.set(java.util.Calendar.MINUTE, 0);
+        calendar.set(java.util.Calendar.SECOND, 0);
+        calendar.set(java.util.Calendar.MILLISECOND, 0);
         long startTime = calendar.getTimeInMillis();
 
-        // 2. Instant App Detection (Using UsageEvents)
+        // 2. Instant Detection (For Blocking/Binging)
         String instantTopApp = getForegroundApp(usm, endTime);
 
-        // 3. Detect App Switch (Reset Timer)
-        if (instantTopApp != null && !instantTopApp.isEmpty()) {
-            if (!instantTopApp.equals(currentForegroundApp)) {
-                currentForegroundApp = instantTopApp;
-                appSessionStart.put(currentForegroundApp, System.currentTimeMillis());
+        // --- FIX: USE PRECISE EVENT CALCULATION ---
+        // We calculate time manually to avoid "Yesterday's Data" bugs
+        Map<String, Long> preciseDurationMap = calculatePreciseUsage(usm, startTime, endTime);
+        Map<String, Integer> launchCounts = getLaunchCounts(usm, startTime, endTime);
+
+        long totalDailyUsage = 0;
+
+        // Iterate through our manually calculated list
+        for (Map.Entry<String, Long> entry : preciseDurationMap.entrySet()) {
+            String pkg = entry.getKey();
+            long duration = entry.getValue();
+
+            if (duration > 0 && !isSystemApp(getPackageManager(), pkg)) {
+                totalDailyUsage += duration;
             }
         }
 
-        // 4. Get Aggregated Stats (Use queryAndAggregate to fix "Yesterday" bug)
-        Map<String, UsageStats> statsMap = usm.queryAndAggregateUsageStats(startTime, endTime);
-        Map<String, Integer> launchCounts = getLaunchCounts(usm, startTime, endTime);
+        // 3. Risk Alerts (Based on the new accurate Total)
+        RiskAnalyzer.RiskLevel risk = RiskAnalyzer.calculateRisk(totalDailyUsage);
+        if ((risk == RiskAnalyzer.RiskLevel.HIGH || risk == RiskAnalyzer.RiskLevel.SEVERE)
+                && !hasSentDailyLimitAlert) {
+            NotificationHelper.sendRiskAlert(this, risk.toString());
+            hasSentDailyLimitAlert = true;
+        }
+        if (totalDailyUsage < 1000 * 60 * 60) hasSentDailyLimitAlert = false;
 
-        if (statsMap != null && !statsMap.isEmpty()) {
-            long totalDailyUsage = 0;
+        // 4. Late Night Check
+        if (RiskAnalyzer.isLateNight()) {
+            long currentTime = System.currentTimeMillis();
+            if (currentTime - lastLateNightAlertTime > (15 * 60 * 1000)) {
+                NotificationHelper.sendLateNightAlert(this);
+                lastLateNightAlertTime = currentTime;
+            }
+        }
 
-            for (UsageStats usage : statsMap.values()) {
-                // FILTER: Ignore apps not touched today
-                if (usage.getLastTimeUsed() < startTime) continue;
+        // 5. Binge & Blocking Logic
+        if (instantTopApp != null && !instantTopApp.isEmpty()
+                && !isSystemApp(getPackageManager(), instantTopApp)) {
 
-                long timeMs = usage.getTotalTimeInForeground();
-                if (timeMs > 0 && !isSystemApp(getPackageManager(), usage.getPackageName())) {
-                    totalDailyUsage += timeMs;
-                }
+            // Blocking
+            if (blockedAppsList.contains(instantTopApp)) {
+                Intent blockIntent = new Intent(this, BlockScreenActivity.class);
+                blockIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+                startActivity(blockIntent);
+                return;
             }
 
-            // 5. Risk Analysis
-            RiskAnalyzer.RiskLevel risk = RiskAnalyzer.calculateRisk(totalDailyUsage);
-            if ((risk == RiskAnalyzer.RiskLevel.HIGH || risk == RiskAnalyzer.RiskLevel.SEVERE)
-                    && !hasSentDailyLimitAlert) {
-                NotificationHelper.sendRiskAlert(this, risk.toString());
-                hasSentDailyLimitAlert = true;
-            }
-            if (totalDailyUsage < 1000 * 60 * 60) hasSentDailyLimitAlert = false; // Reset flag next day
-
-            // 6. Late Night Alert
-            if (RiskAnalyzer.isLateNight()) {
-                long currentTime = System.currentTimeMillis();
-                if (currentTime - lastLateNightAlertTime > (15 * 60 * 1000)) {
-                    NotificationHelper.sendLateNightAlert(this);
-                    lastLateNightAlertTime = currentTime;
-                }
-            }
-
-            // 7. Binge & Blocking Logic
-            if (currentForegroundApp != null && !currentForegroundApp.isEmpty()
-                    && !isSystemApp(getPackageManager(), currentForegroundApp)) {
-
-                // Blocking
-                if (blockedAppsList.contains(currentForegroundApp)) {
-                    Intent blockIntent = new Intent(this, BlockScreenActivity.class);
-                    blockIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
-                    startActivity(blockIntent);
-                    return; // Stop here if blocked
-                }
-
-                // Binge Alert
+            // Binge Logic (Detect App Switch)
+            if (!instantTopApp.equals(currentForegroundApp)) {
+                currentForegroundApp = instantTopApp;
+                appSessionStart.put(currentForegroundApp, System.currentTimeMillis());
+            } else {
                 Long start = appSessionStart.get(currentForegroundApp);
                 if (start != null) {
                     long sessionDuration = System.currentTimeMillis() - start;
@@ -183,32 +180,76 @@ public class TrackingService extends Service {
                     }
                 }
             }
-
-            // 8. Upload Data
-            uploadData(statsMap, launchCounts, startTime);
         }
+
+        // 6. Upload Data (Using the new Precise Map)
+        uploadDataPrecise(preciseDurationMap, launchCounts);
     }
 
-    // --- HELPER: Upload Logic ---
-    private void uploadData(Map<String, UsageStats> statsMap, Map<String, Integer> launchCounts, long midnightTime) {
+    // --- NEW HELPER: THE MATH ENGINE (Copy this into TrackingService) ---
+    private Map<String, Long> calculatePreciseUsage(UsageStatsManager usm, long startTime, long endTime) {
+        Map<String, Long> durationMap = new HashMap<>();
+        Map<String, Long> openEvents = new HashMap<>();
+
+        // Query EVENTS (Logs), not STATS (Buckets)
+        UsageEvents events = usm.queryEvents(startTime, endTime);
+        UsageEvents.Event event = new UsageEvents.Event();
+
+        while (events.hasNextEvent()) {
+            events.getNextEvent(event);
+            String pkg = event.getPackageName();
+
+            if (event.getEventType() == UsageEvents.Event.MOVE_TO_FOREGROUND) {
+                // App opened: Record Start Time
+                openEvents.put(pkg, event.getTimeStamp());
+            }
+            else if (event.getEventType() == UsageEvents.Event.MOVE_TO_BACKGROUND) {
+                // App closed: Calculate Duration
+                if (openEvents.containsKey(pkg)) {
+                    long start = openEvents.get(pkg);
+                    long duration = event.getTimeStamp() - start;
+
+                    // Add to total duration map
+                    long currentTotal = durationMap.getOrDefault(pkg, 0L);
+                    durationMap.put(pkg, currentTotal + duration);
+
+                    // Remove from open list
+                    openEvents.remove(pkg);
+                }
+            }
+        }
+
+        // Handle apps that are CURRENTLY open (No "Background" event yet)
+        for (Map.Entry<String, Long> entry : openEvents.entrySet()) {
+            String pkg = entry.getKey();
+            long start = entry.getValue();
+            long duration = endTime - start; // Time until now
+
+            long currentTotal = durationMap.getOrDefault(pkg, 0L);
+            durationMap.put(pkg, currentTotal + duration);
+        }
+
+        return durationMap;
+    }
+
+    // --- NEW UPLOAD HELPER (Compatible with new Map) ---
+    private void uploadDataPrecise(Map<String, Long> durationMap, Map<String, Integer> launchCounts) {
         if (mDatabase == null) return;
         PackageManager pm = getPackageManager();
         String dateKey = new SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(new Date());
 
-        for (UsageStats usage : statsMap.values()) {
-            // CRITICAL: Don't upload data from yesterday
-            if (usage.getLastTimeUsed() < midnightTime) continue;
+        for (Map.Entry<String, Long> entry : durationMap.entrySet()) {
+            String pkg = entry.getKey();
+            long timeMs = entry.getValue();
 
-            long timeMs = usage.getTotalTimeInForeground();
-            if (timeMs > 1000) {
-                String pkg = usage.getPackageName();
-                if (isSystemApp(pm, pkg)) continue;
-
+            // Filter small usage and system apps
+            if (timeMs > 1000 && !isSystemApp(pm, pkg)) {
                 try {
                     String appName = getAppName(pkg);
                     String category = CategoryHelper.getCategory(this, pkg);
                     int count = launchCounts.getOrDefault(pkg, 0);
-                    long lastUsed = usage.getLastTimeUsed();
+                    // LastUsed is not easily available in Events, using current time approx
+                    long lastUsed = System.currentTimeMillis();
 
                     AppUsageData data = new AppUsageData(pkg, appName, timeMs, category, count, lastUsed);
                     String firebaseUrlKey = pkg.replace(".", "_");
@@ -219,6 +260,9 @@ public class TrackingService extends Service {
             }
         }
     }
+
+    // --- HELPER: Upload Logic ---
+
 
     // --- HELPER: Instant Detection ---
     private String getForegroundApp(UsageStatsManager usm, long endTime) {

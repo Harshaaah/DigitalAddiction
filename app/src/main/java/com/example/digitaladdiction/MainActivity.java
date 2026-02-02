@@ -41,6 +41,8 @@ import com.google.firebase.database.DatabaseError;
 import com.google.firebase.database.DatabaseReference;
 import com.google.firebase.database.FirebaseDatabase;
 import com.google.firebase.database.ValueEventListener;
+import java.util.HashMap;
+import android.app.usage.UsageEvents;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -178,34 +180,77 @@ public class MainActivity extends AppCompatActivity {
         UsageStatsManager usm = (UsageStatsManager) getSystemService(Context.USAGE_STATS_SERVICE);
         PackageManager pm = getPackageManager();
 
-        // 1. Calculate Midnight
-        Calendar calendar = Calendar.getInstance();
-        calendar.set(Calendar.HOUR_OF_DAY, 0);
-        calendar.set(Calendar.MINUTE, 0);
-        calendar.set(Calendar.SECOND, 0);
-        calendar.set(Calendar.MILLISECOND, 0);
+        // Calculate Midnight
+        java.util.Calendar calendar = java.util.Calendar.getInstance();
+        calendar.set(java.util.Calendar.HOUR_OF_DAY, 0);
+        calendar.set(java.util.Calendar.MINUTE, 0);
+        calendar.set(java.util.Calendar.SECOND, 0);
+        calendar.set(java.util.Calendar.MILLISECOND, 0);
         long startTime = calendar.getTimeInMillis();
         long endTime = System.currentTimeMillis();
 
+        // --- FIX: USE MANUAL CALCULATION ---
+        Map<String, Long> preciseDurationMap = calculatePreciseUsage(usm, startTime, endTime);
+
         totalDailyUsage = 0;
 
-        // 2. Use Aggregate Query (Fixes Yesterday Bug)
-        Map<String, UsageStats> statsMap = usm.queryAndAggregateUsageStats(startTime, endTime);
+        for (Map.Entry<String, Long> entry : preciseDurationMap.entrySet()) {
+            String pkg = entry.getKey();
+            long duration = entry.getValue();
 
-        if (statsMap != null) {
-            for (UsageStats usage : statsMap.values()) {
-                // Timestamp Check (Fixes Yesterday Bug)
-                if (usage.getLastTimeUsed() < startTime) continue;
-
-                long timeMs = usage.getTotalTimeInForeground();
-                if (timeMs > 0 && !isSystemApp(pm, usage.getPackageName())) {
-                    totalDailyUsage += timeMs;
-                }
+            if (duration > 0 && !isSystemApp(pm, pkg)) {
+                totalDailyUsage += duration;
             }
-            updateRiskUI();
         }
+        updateRiskUI();
+        // updateChartData... (if using chart, pass the map keys/values)
     }
 
+    // Paste the calculatePreciseUsage method here inside MainActivity as well...
+    private Map<String, Long> calculatePreciseUsage(UsageStatsManager usm, long startTime, long endTime) {
+        Map<String, Long> durationMap = new HashMap<>();
+        Map<String, Long> openEvents = new HashMap<>();
+
+        // Query EVENTS (Logs), not STATS (Buckets)
+        UsageEvents events = usm.queryEvents(startTime, endTime);
+        UsageEvents.Event event = new UsageEvents.Event();
+
+        while (events.hasNextEvent()) {
+            events.getNextEvent(event);
+            String pkg = event.getPackageName();
+
+            if (event.getEventType() == UsageEvents.Event.MOVE_TO_FOREGROUND) {
+                // App opened: Record Start Time
+                openEvents.put(pkg, event.getTimeStamp());
+            }
+            else if (event.getEventType() == UsageEvents.Event.MOVE_TO_BACKGROUND) {
+                // App closed: Calculate Duration
+                if (openEvents.containsKey(pkg)) {
+                    long start = openEvents.get(pkg);
+                    long duration = event.getTimeStamp() - start;
+
+                    // Add to total duration map
+                    long currentTotal = durationMap.getOrDefault(pkg, 0L);
+                    durationMap.put(pkg, currentTotal + duration);
+
+                    // Remove from open list
+                    openEvents.remove(pkg);
+                }
+            }
+        }
+
+        // Handle apps that are CURRENTLY open (No "Background" event yet)
+        for (Map.Entry<String, Long> entry : openEvents.entrySet()) {
+            String pkg = entry.getKey();
+            long start = entry.getValue();
+            long duration = endTime - start; // Time until now
+
+            long currentTotal = durationMap.getOrDefault(pkg, 0L);
+            durationMap.put(pkg, currentTotal + duration);
+        }
+
+        return durationMap;
+    }
     // MAKE SURE TO COPY THE UPDATED isSystemApp from TrackingService to MainActivity too!
     private boolean isSystemApp(PackageManager pm, String pkg) {
         if (pkg.contains("youtube") || pkg.contains("chrome") || pkg.contains("whatsapp") ||
