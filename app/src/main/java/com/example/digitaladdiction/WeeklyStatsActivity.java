@@ -23,14 +23,14 @@ import com.github.mikephil.charting.utils.ColorTemplate;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Calendar;
-import java.util.Collections;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 
 public class WeeklyStatsActivity extends AppCompatActivity {
 
     private BarChart barChart;
-    private TextView tvSummary;
+    private TextView tvSummary, tvPrediction; // Added Prediction TextView
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -39,6 +39,7 @@ public class WeeklyStatsActivity extends AppCompatActivity {
 
         barChart = findViewById(R.id.barChart);
         tvSummary = findViewById(R.id.tvWeeklySummary);
+        tvPrediction = findViewById(R.id.tvPrediction); // Bind View
         Button btnBack = findViewById(R.id.btnBack);
 
         btnBack.setOnClickListener(v -> finish());
@@ -52,71 +53,94 @@ public class WeeklyStatsActivity extends AppCompatActivity {
 
         ArrayList<BarEntry> entries = new ArrayList<>();
         ArrayList<String> labels = new ArrayList<>();
+
+        // List to store history for AI Prediction
+        List<Double> historyForAI = new ArrayList<>();
+
         long totalWeeklyTime = 0;
 
-        // Loop for the last 7 days (including today)
+        // Loop for the last 7 days (6 days ago -> Today)
         for (int i = 6; i >= 0; i--) {
             Calendar calendar = Calendar.getInstance();
-            calendar.add(Calendar.DAY_OF_YEAR, -i); // Go back 'i' days
+            calendar.add(Calendar.DAY_OF_YEAR, -i);
 
-            // Set Start time: 00:00:00
+            // Start: 00:00:00
             calendar.set(Calendar.HOUR_OF_DAY, 0);
             calendar.set(Calendar.MINUTE, 0);
             calendar.set(Calendar.SECOND, 0);
             calendar.set(Calendar.MILLISECOND, 0);
             long startTime = calendar.getTimeInMillis();
 
-            // Set End time: 23:59:59 (End of that day)
+            // End: 23:59:59
             Calendar endCal = (Calendar) calendar.clone();
             endCal.add(Calendar.DAY_OF_YEAR, 1);
             long endTime = endCal.getTimeInMillis();
 
-            // --- GET USAGE FOR THIS SPECIFIC DAY ---
+            // Get Data
             long dailyTotal = calculateDailyUsage(usm, pm, startTime, endTime);
 
-            // Convert to Hours (Float for graph)
+            // Convert to Hours
             float hours = dailyTotal / (1000f * 60 * 60);
 
-            // Add to Graph Data (x = index, y = hours)
+            // Add to Graph
             entries.add(new BarEntry(6 - i, hours));
 
-            // Get Day Name (e.g., "Mon")
+            // Add to AI History (Double format)
+            historyForAI.add((double) hours);
+
             String dayName = new SimpleDateFormat("EEE", Locale.getDefault()).format(calendar.getTime());
             labels.add(dayName);
 
             totalWeeklyTime += dailyTotal;
         }
 
-        // --- SETUP CHART VISUALS ---
+        // --- 1. SETUP GRAPH ---
         BarDataSet dataSet = new BarDataSet(entries, "Daily Usage (Hours)");
         dataSet.setColors(ColorTemplate.MATERIAL_COLORS);
         dataSet.setValueTextSize(12f);
 
         BarData barData = new BarData(dataSet);
-        barData.setBarWidth(0.6f); // Slimmer bars
+        barData.setBarWidth(0.6f);
 
         barChart.setData(barData);
         barChart.getDescription().setEnabled(false);
-        barChart.animateY(1500); // Animation
+        barChart.animateY(1500);
 
-        // Configure X-Axis (Days)
         XAxis xAxis = barChart.getXAxis();
         xAxis.setValueFormatter(new IndexAxisValueFormatter(labels));
         xAxis.setPosition(XAxis.XAxisPosition.BOTTOM);
         xAxis.setGranularity(1f);
         xAxis.setDrawGridLines(false);
 
-        // Update Summary Text
+        // --- 2. SETUP SUMMARY ---
         long avgTime = totalWeeklyTime / 7;
         long avgHrs = avgTime / (1000 * 60 * 60);
         long avgMins = (avgTime / (1000 * 60)) % 60;
-
         tvSummary.setText("Average Usage: " + avgHrs + "h " + avgMins + "m / day");
+
+        // --- 3. RUN AI PREDICTION ---
+        runPredictionEngine(historyForAI);
     }
 
-    // Reuse the accurate calculation logic we fixed in Phase 4
+    private void runPredictionEngine(List<Double> history) {
+        // Use your PredictionAI class logic
+        double predictedHours = PredictionAI.predictNextDayUsage(history);
+
+        String msg;
+        if (predictedHours > 4.0) {
+            msg = String.format("⚠️ WARNING: Your usage trend is increasing. AI predicts you will reach %.1f hours tomorrow. Try to reduce screen time today.", predictedHours);
+            tvPrediction.setTextColor(Color.RED);
+        } else if (predictedHours < 2.0) {
+            msg = String.format("✅ HEALTHY TREND: Great job! Predicted usage for tomorrow is %.1f hours. Keep maintaining this balance.", predictedHours);
+            tvPrediction.setTextColor(Color.parseColor("#4CAF50")); // Green
+        } else {
+            msg = String.format("ℹ️ STABLE: Your usage pattern is stable. Predicted usage: %.1f hours.", predictedHours);
+            tvPrediction.setTextColor(Color.BLACK);
+        }
+        tvPrediction.setText(msg);
+    }
+
     private long calculateDailyUsage(UsageStatsManager usm, PackageManager pm, long start, long end) {
-        // Limit 'end' to current time if we are calculating Today (to avoid future errors)
         if (end > System.currentTimeMillis()) end = System.currentTimeMillis();
 
         Map<String, UsageStats> statsMap = usm.queryAndAggregateUsageStats(start, end);
@@ -124,7 +148,7 @@ public class WeeklyStatsActivity extends AppCompatActivity {
 
         if (statsMap != null) {
             for (UsageStats usage : statsMap.values()) {
-                if (usage.getLastTimeUsed() < start) continue; // Ignore old data
+                if (usage.getLastTimeUsed() < start) continue;
                 long timeMs = usage.getTotalTimeInForeground();
                 if (timeMs > 0 && !isSystemApp(pm, usage.getPackageName())) {
                     total += timeMs;
@@ -134,7 +158,6 @@ public class WeeklyStatsActivity extends AppCompatActivity {
         return total;
     }
 
-    // Same Filter as TrackingService
     private boolean isSystemApp(PackageManager pm, String pkg) {
         if (pkg.contains("youtube") || pkg.contains("chrome") || pkg.contains("whatsapp") ||
                 pkg.contains("instagram") || pkg.contains("facebook") || pkg.contains("snapchat")) return false;
