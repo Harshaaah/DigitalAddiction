@@ -8,7 +8,7 @@ import androidx.core.app.NotificationCompat;
 
 public class NotificationHelper {
 
-    private static final String CHANNEL_ID = "addiction_alerts_v2";
+    private static final String CHANNEL_ID = "addiction_alerts_v3";
     private static final String CHANNEL_NAME = "Addiction Alerts";
 
     // Unique IDs to ensure notifications don't overwrite each other
@@ -38,7 +38,7 @@ public class NotificationHelper {
                 .setSmallIcon(android.R.drawable.ic_dialog_alert)
                 .setContentTitle("Daily Usage Warning")
                 .setContentText("Risk Level is now " + level + ". Please slow down.")
-                .setPriority(NotificationCompat.PRIORITY_MAX)
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
                 .setAutoCancel(true);
 
         notify(context, NOTIF_ID_RISK, builder);
@@ -50,7 +50,7 @@ public class NotificationHelper {
                 .setSmallIcon(android.R.drawable.ic_lock_idle_alarm)
                 .setContentTitle("Late Night Detected")
                 .setContentText("It is sleeping time. Put the phone away!")
-                .setPriority(NotificationCompat.PRIORITY_MAX)
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
                 .setDefaults(NotificationCompat.DEFAULT_ALL)
                 .setAutoCancel(true);
 

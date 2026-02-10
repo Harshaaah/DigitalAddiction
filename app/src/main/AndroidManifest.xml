@@ -29,6 +29,8 @@
 
         <activity android:name=".RegisterActivity" />
         <activity android:name=".MainActivity" />
+        <activity android:name=".WeeklyStatsActivity"
+            android:parentActivityName=".MainActivity" />
         <activity android:name=".BlockScreenActivity"
             android:exported="false"
             android:theme="@style/Theme.AppCompat.Light.NoActionBar"

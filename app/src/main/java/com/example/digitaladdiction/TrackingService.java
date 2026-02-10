@@ -173,7 +173,8 @@ public class TrackingService extends Service {
                 Long start = appSessionStart.get(currentForegroundApp);
                 if (start != null) {
                     long sessionDuration = System.currentTimeMillis() - start;
-                    if (sessionDuration > 3600000) { // 1 Hour
+                    // --- TEST MODE: 1 MINUTE (60000 ms) 1800000 ---
+                    if (sessionDuration > 1800000) { // 1/2 Hour
                         String timeString = (sessionDuration / 60000) + " mins";
                         NotificationHelper.sendBingeAlert(this, getAppName(currentForegroundApp), timeString);
                         appSessionStart.put(currentForegroundApp, System.currentTimeMillis());

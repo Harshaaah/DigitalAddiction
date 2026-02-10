@@ -73,7 +73,15 @@ public class MainActivity extends AppCompatActivity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
+        Button btnWeekly = findViewById(R.id.btnWeeklyReport);
 
+
+        // --- UPDATED: No PIN required for Weekly Report ---
+        btnWeekly.setOnClickListener(v -> {
+            // Directly open the activity without asking for PIN
+            Intent intent = new Intent(MainActivity.this, WeeklyStatsActivity.class);
+            startActivity(intent);
+        });
         // 1. Initialize Notification Channel
         NotificationHelper.createNotificationChannel(this);
 

@@ -79,6 +79,13 @@
 
     <!-- PARENT CONTROLS -->
     <Button
+        android:id="@+id/btnWeeklyReport"
+        android:text="View Weekly Report"
+        android:backgroundTint="#FF9800"
+        android:layout_marginTop="10dp"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"/>
+    <Button
         android:id="@+id/btnParentSettings"
         android:text="Parent Settings (PIN Required)"
         android:padding="12dp"
