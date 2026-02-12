@@ -141,15 +141,24 @@ public class WeeklyStatsActivity extends AppCompatActivity {
     }
 
     private long calculateDailyUsage(UsageStatsManager usm, PackageManager pm, long start, long end) {
-        if (end > System.currentTimeMillis()) end = System.currentTimeMillis();
+        // --- FIX: Cap the end time ---
+        // If we are calculating "Today", stop at the current second.
+        // Don't ask Android for data up to 11:59 PM tonight (which causes bucket errors).
+        if (end > System.currentTimeMillis()) {
+            end = System.currentTimeMillis();
+        }
 
         Map<String, UsageStats> statsMap = usm.queryAndAggregateUsageStats(start, end);
         long total = 0;
 
         if (statsMap != null) {
             for (UsageStats usage : statsMap.values()) {
+                // Ignore data from before the start time (Yesterday's spillover)
                 if (usage.getLastTimeUsed() < start) continue;
+
                 long timeMs = usage.getTotalTimeInForeground();
+
+                // Check valid time and filter System Apps using the NEW logic
                 if (timeMs > 0 && !isSystemApp(pm, usage.getPackageName())) {
                     total += timeMs;
                 }
@@ -159,14 +168,33 @@ public class WeeklyStatsActivity extends AppCompatActivity {
     }
 
     private boolean isSystemApp(PackageManager pm, String pkg) {
-        if (pkg.contains("youtube") || pkg.contains("chrome") || pkg.contains("whatsapp") ||
-                pkg.contains("instagram") || pkg.contains("facebook") || pkg.contains("snapchat")) return false;
+        // 1. WHITELIST: Always track these
+        if (pkg.contains("youtube") ||
+                pkg.contains("chrome") ||
+                pkg.contains("whatsapp") ||
+                pkg.contains("instagram") ||
+                pkg.contains("facebook") ||
+                pkg.contains("snapchat")) {
+            return false;
+        }
 
-        if (pkg.contains("launcher") || pkg.contains("home")) return true;
+        // 2. BLACKLIST: Explicitly IGNORE Home Screens / Launchers
+        // --- THIS IS THE FIX FOR THE 6 HOUR ERROR ---
+        if (pkg.contains("launcher") ||
+                pkg.contains("home") ||
+                pkg.contains("nexus") ||
+                pkg.contains("trebuchet") ||
+                pkg.equals("com.android.systemui")) {
+            return true; // Ignore (Don't count time)
+        }
 
         try {
             ApplicationInfo ai = pm.getApplicationInfo(pkg, 0);
-            return (ai.flags & ApplicationInfo.FLAG_SYSTEM) != 0 && (ai.flags & ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) == 0;
-        } catch (Exception e) { return true; }
+            // 3. Standard System Filter
+            return (ai.flags & ApplicationInfo.FLAG_SYSTEM) != 0 &&
+                    (ai.flags & ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) == 0;
+        } catch (Exception e) {
+            return true;
+        }
     }
 }
