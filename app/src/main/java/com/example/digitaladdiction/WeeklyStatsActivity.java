@@ -1,6 +1,6 @@
 package com.example.digitaladdiction;
 
-import android.app.usage.UsageStats;
+import android.app.usage.UsageEvents;
 import android.app.usage.UsageStatsManager;
 import android.content.Context;
 import android.content.pm.ApplicationInfo;
@@ -23,6 +23,7 @@ import com.github.mikephil.charting.utils.ColorTemplate;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Calendar;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -56,26 +57,25 @@ public class WeeklyStatsActivity extends AppCompatActivity {
         List<Double> historyForAI = new ArrayList<>();
         long totalWeeklyTime = 0;
 
-        // Loop for the last 7 days (including today)
+        // Loop for the last 7 days
         for (int i = 6; i >= 0; i--) {
-
-            // 1. Set Start Time (Midnight of that specific day)
             Calendar startCal = Calendar.getInstance();
             startCal.add(Calendar.DAY_OF_YEAR, -i);
+
+            // Set Start Time: 00:00:00
             startCal.set(Calendar.HOUR_OF_DAY, 0);
             startCal.set(Calendar.MINUTE, 0);
             startCal.set(Calendar.SECOND, 0);
             startCal.set(Calendar.MILLISECOND, 0);
             long startTime = startCal.getTimeInMillis();
 
-            // 2. Set End Time
+            // Set End Time
             long endTime;
             if (i == 0) {
-                // FIX: If it is TODAY, end time must be NOW.
-                // Requesting "Tomorrow Midnight" causes inaccurate bucket returns on some phones.
+                // TODAY: Stop exactly NOW
                 endTime = System.currentTimeMillis();
             } else {
-                // If it is a PAST day, end time is 23:59:59 of that day
+                // PAST: Stop at 23:59:59
                 Calendar endCal = (Calendar) startCal.clone();
                 endCal.set(Calendar.HOUR_OF_DAY, 23);
                 endCal.set(Calendar.MINUTE, 59);
@@ -83,10 +83,10 @@ public class WeeklyStatsActivity extends AppCompatActivity {
                 endTime = endCal.getTimeInMillis();
             }
 
-            // 3. Calculate
-            long dailyTotal = calculateDailyUsage(usm, pm, startTime, endTime);
+            // --- USE NEW PRECISE CALCULATION ---
+            long dailyTotal = calculatePreciseDailyUsage(usm, pm, startTime, endTime);
 
-            // 4. Add to Graph (Convert ms to Hours)
+            // Convert to Hours
             float hours = dailyTotal / (1000f * 60 * 60);
             entries.add(new BarEntry(6 - i, hours));
             historyForAI.add((double) hours);
@@ -97,7 +97,7 @@ public class WeeklyStatsActivity extends AppCompatActivity {
             totalWeeklyTime += dailyTotal;
         }
 
-        // --- CHART SETUP ---
+        // Chart Setup
         BarDataSet dataSet = new BarDataSet(entries, "Daily Usage (Hours)");
         dataSet.setColors(ColorTemplate.MATERIAL_COLORS);
         dataSet.setValueTextSize(12f);
@@ -107,7 +107,7 @@ public class WeeklyStatsActivity extends AppCompatActivity {
 
         barChart.setData(barData);
         barChart.getDescription().setEnabled(false);
-        barChart.animateY(1500);
+        barChart.animateY(1000);
 
         XAxis xAxis = barChart.getXAxis();
         xAxis.setValueFormatter(new IndexAxisValueFormatter(labels));
@@ -121,31 +121,64 @@ public class WeeklyStatsActivity extends AppCompatActivity {
         long avgMins = (avgTime / (1000 * 60)) % 60;
         tvSummary.setText("Average Usage: " + avgHrs + "h " + avgMins + "m / day");
 
-        // Prediction
         runPredictionEngine(historyForAI);
     }
 
-    private long calculateDailyUsage(UsageStatsManager usm, PackageManager pm, long start, long end) {
-        // Use Aggregate Query to chop data precisely at 'start' and 'end'
-        Map<String, UsageStats> statsMap = usm.queryAndAggregateUsageStats(start, end);
-        long total = 0;
+    // --- NEW: EVENT-BASED CALCULATION (100% Accurate) ---
+    private long calculatePreciseDailyUsage(UsageStatsManager usm, PackageManager pm, long start, long end) {
+        // Query Raw Events instead of Aggregated Stats
+        UsageEvents events = usm.queryEvents(start, end);
+        UsageEvents.Event event = new UsageEvents.Event();
 
-        if (statsMap != null) {
-            for (UsageStats usage : statsMap.values()) {
-                // FIX: Strict check - if app wasn't used within this specific day range, ignore it.
-                // This prevents yesterday's usage from leaking into today.
-                if (usage.getLastTimeUsed() < start) continue;
-                if (usage.getLastTimeUsed() > end) continue;
+        Map<String, Long> appStartMap = new HashMap<>();
+        Map<String, Long> appDurationMap = new HashMap<>();
 
-                long timeMs = usage.getTotalTimeInForeground();
+        while (events.hasNextEvent()) {
+            events.getNextEvent(event);
+            String pkg = event.getPackageName();
 
-                // Filter System Apps & Zero usage
-                if (timeMs > 0 && !isSystemApp(pm, usage.getPackageName())) {
-                    total += timeMs;
+            // Filter out system apps immediately to save processing
+            if (isSystemApp(pm, pkg)) continue;
+
+            if (event.getEventType() == UsageEvents.Event.MOVE_TO_FOREGROUND) {
+                appStartMap.put(pkg, event.getTimeStamp());
+            }
+            else if (event.getEventType() == UsageEvents.Event.MOVE_TO_BACKGROUND) {
+                if (appStartMap.containsKey(pkg)) {
+                    long startTime = appStartMap.get(pkg);
+                    long duration = event.getTimeStamp() - startTime;
+
+                    appDurationMap.put(pkg, appDurationMap.getOrDefault(pkg, 0L) + duration);
+                    appStartMap.remove(pkg);
                 }
             }
         }
-        return total;
+
+        // Handle apps that are currently OPEN (No Background event yet)
+        for (Map.Entry<String, Long> entry : appStartMap.entrySet()) {
+            long duration = end - entry.getValue();
+            appDurationMap.put(entry.getKey(), appDurationMap.getOrDefault(entry.getKey(), 0L) + duration);
+        }
+
+        // Sum it all up
+        long totalDayUsage = 0;
+        for (Long duration : appDurationMap.values()) {
+            totalDayUsage += duration;
+        }
+        return totalDayUsage;
+    }
+
+    private boolean isSystemApp(PackageManager pm, String pkg) {
+        if (pkg.contains("youtube") || pkg.contains("chrome") || pkg.contains("whatsapp") ||
+                pkg.contains("instagram") || pkg.contains("facebook") || pkg.contains("snapchat")) return false;
+
+        if (pkg.contains("launcher") || pkg.contains("home") || pkg.contains("nexus") ||
+                pkg.contains("trebuchet") || pkg.contains("android.systemui")) return true;
+
+        try {
+            ApplicationInfo ai = pm.getApplicationInfo(pkg, 0);
+            return (ai.flags & ApplicationInfo.FLAG_SYSTEM) != 0 && (ai.flags & ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) == 0;
+        } catch (Exception e) { return true; }
     }
 
     private void runPredictionEngine(List<Double> history) {
@@ -162,19 +195,5 @@ public class WeeklyStatsActivity extends AppCompatActivity {
             tvPrediction.setTextColor(Color.BLACK);
         }
         tvPrediction.setText(msg);
-    }
-
-    private boolean isSystemApp(PackageManager pm, String pkg) {
-        // Whitelist
-        if (pkg.contains("youtube") || pkg.contains("chrome") || pkg.contains("whatsapp") ||
-                pkg.contains("instagram") || pkg.contains("facebook") || pkg.contains("snapchat")) return false;
-
-        // Blacklist Launchers (Critical for fixing High Time error)
-        if (pkg.contains("launcher") || pkg.contains("home") || pkg.contains("nexus") || pkg.contains("trebuchet")) return true;
-
-        try {
-            ApplicationInfo ai = pm.getApplicationInfo(pkg, 0);
-            return (ai.flags & ApplicationInfo.FLAG_SYSTEM) != 0 && (ai.flags & ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) == 0;
-        } catch (Exception e) { return true; }
     }
 }
