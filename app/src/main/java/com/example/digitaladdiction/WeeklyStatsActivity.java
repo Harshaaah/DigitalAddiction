@@ -30,7 +30,7 @@ import java.util.Map;
 public class WeeklyStatsActivity extends AppCompatActivity {
 
     private BarChart barChart;
-    private TextView tvSummary, tvPrediction; // Added Prediction TextView
+    private TextView tvSummary, tvPrediction;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -39,7 +39,7 @@ public class WeeklyStatsActivity extends AppCompatActivity {
 
         barChart = findViewById(R.id.barChart);
         tvSummary = findViewById(R.id.tvWeeklySummary);
-        tvPrediction = findViewById(R.id.tvPrediction); // Bind View
+        tvPrediction = findViewById(R.id.tvPrediction);
         Button btnBack = findViewById(R.id.btnBack);
 
         btnBack.setOnClickListener(v -> finish());
@@ -53,48 +53,51 @@ public class WeeklyStatsActivity extends AppCompatActivity {
 
         ArrayList<BarEntry> entries = new ArrayList<>();
         ArrayList<String> labels = new ArrayList<>();
-
-        // List to store history for AI Prediction
         List<Double> historyForAI = new ArrayList<>();
-
         long totalWeeklyTime = 0;
 
-        // Loop for the last 7 days (6 days ago -> Today)
+        // Loop for the last 7 days (including today)
         for (int i = 6; i >= 0; i--) {
-            Calendar calendar = Calendar.getInstance();
-            calendar.add(Calendar.DAY_OF_YEAR, -i);
 
-            // Start: 00:00:00
-            calendar.set(Calendar.HOUR_OF_DAY, 0);
-            calendar.set(Calendar.MINUTE, 0);
-            calendar.set(Calendar.SECOND, 0);
-            calendar.set(Calendar.MILLISECOND, 0);
-            long startTime = calendar.getTimeInMillis();
+            // 1. Set Start Time (Midnight of that specific day)
+            Calendar startCal = Calendar.getInstance();
+            startCal.add(Calendar.DAY_OF_YEAR, -i);
+            startCal.set(Calendar.HOUR_OF_DAY, 0);
+            startCal.set(Calendar.MINUTE, 0);
+            startCal.set(Calendar.SECOND, 0);
+            startCal.set(Calendar.MILLISECOND, 0);
+            long startTime = startCal.getTimeInMillis();
 
-            // End: 23:59:59
-            Calendar endCal = (Calendar) calendar.clone();
-            endCal.add(Calendar.DAY_OF_YEAR, 1);
-            long endTime = endCal.getTimeInMillis();
+            // 2. Set End Time
+            long endTime;
+            if (i == 0) {
+                // FIX: If it is TODAY, end time must be NOW.
+                // Requesting "Tomorrow Midnight" causes inaccurate bucket returns on some phones.
+                endTime = System.currentTimeMillis();
+            } else {
+                // If it is a PAST day, end time is 23:59:59 of that day
+                Calendar endCal = (Calendar) startCal.clone();
+                endCal.set(Calendar.HOUR_OF_DAY, 23);
+                endCal.set(Calendar.MINUTE, 59);
+                endCal.set(Calendar.SECOND, 59);
+                endTime = endCal.getTimeInMillis();
+            }
 
-            // Get Data
+            // 3. Calculate
             long dailyTotal = calculateDailyUsage(usm, pm, startTime, endTime);
 
-            // Convert to Hours
+            // 4. Add to Graph (Convert ms to Hours)
             float hours = dailyTotal / (1000f * 60 * 60);
-
-            // Add to Graph
             entries.add(new BarEntry(6 - i, hours));
-
-            // Add to AI History (Double format)
             historyForAI.add((double) hours);
 
-            String dayName = new SimpleDateFormat("EEE", Locale.getDefault()).format(calendar.getTime());
+            String dayName = new SimpleDateFormat("EEE", Locale.getDefault()).format(startCal.getTime());
             labels.add(dayName);
 
             totalWeeklyTime += dailyTotal;
         }
 
-        // --- 1. SETUP GRAPH ---
+        // --- CHART SETUP ---
         BarDataSet dataSet = new BarDataSet(entries, "Daily Usage (Hours)");
         dataSet.setColors(ColorTemplate.MATERIAL_COLORS);
         dataSet.setValueTextSize(12f);
@@ -112,53 +115,31 @@ public class WeeklyStatsActivity extends AppCompatActivity {
         xAxis.setGranularity(1f);
         xAxis.setDrawGridLines(false);
 
-        // --- 2. SETUP SUMMARY ---
+        // Summary
         long avgTime = totalWeeklyTime / 7;
         long avgHrs = avgTime / (1000 * 60 * 60);
         long avgMins = (avgTime / (1000 * 60)) % 60;
         tvSummary.setText("Average Usage: " + avgHrs + "h " + avgMins + "m / day");
 
-        // --- 3. RUN AI PREDICTION ---
+        // Prediction
         runPredictionEngine(historyForAI);
     }
 
-    private void runPredictionEngine(List<Double> history) {
-        // Use your PredictionAI class logic
-        double predictedHours = PredictionAI.predictNextDayUsage(history);
-
-        String msg;
-        if (predictedHours > 4.0) {
-            msg = String.format("⚠️ WARNING: Your usage trend is increasing. AI predicts you will reach %.1f hours tomorrow. Try to reduce screen time today.", predictedHours);
-            tvPrediction.setTextColor(Color.RED);
-        } else if (predictedHours < 2.0) {
-            msg = String.format("✅ HEALTHY TREND: Great job! Predicted usage for tomorrow is %.1f hours. Keep maintaining this balance.", predictedHours);
-            tvPrediction.setTextColor(Color.parseColor("#4CAF50")); // Green
-        } else {
-            msg = String.format("ℹ️ STABLE: Your usage pattern is stable. Predicted usage: %.1f hours.", predictedHours);
-            tvPrediction.setTextColor(Color.BLACK);
-        }
-        tvPrediction.setText(msg);
-    }
-
     private long calculateDailyUsage(UsageStatsManager usm, PackageManager pm, long start, long end) {
-        // --- FIX: Cap the end time ---
-        // If we are calculating "Today", stop at the current second.
-        // Don't ask Android for data up to 11:59 PM tonight (which causes bucket errors).
-        if (end > System.currentTimeMillis()) {
-            end = System.currentTimeMillis();
-        }
-
+        // Use Aggregate Query to chop data precisely at 'start' and 'end'
         Map<String, UsageStats> statsMap = usm.queryAndAggregateUsageStats(start, end);
         long total = 0;
 
         if (statsMap != null) {
             for (UsageStats usage : statsMap.values()) {
-                // Ignore data from before the start time (Yesterday's spillover)
+                // FIX: Strict check - if app wasn't used within this specific day range, ignore it.
+                // This prevents yesterday's usage from leaking into today.
                 if (usage.getLastTimeUsed() < start) continue;
+                if (usage.getLastTimeUsed() > end) continue;
 
                 long timeMs = usage.getTotalTimeInForeground();
 
-                // Check valid time and filter System Apps using the NEW logic
+                // Filter System Apps & Zero usage
                 if (timeMs > 0 && !isSystemApp(pm, usage.getPackageName())) {
                     total += timeMs;
                 }
@@ -167,34 +148,33 @@ public class WeeklyStatsActivity extends AppCompatActivity {
         return total;
     }
 
-    private boolean isSystemApp(PackageManager pm, String pkg) {
-        // 1. WHITELIST: Always track these
-        if (pkg.contains("youtube") ||
-                pkg.contains("chrome") ||
-                pkg.contains("whatsapp") ||
-                pkg.contains("instagram") ||
-                pkg.contains("facebook") ||
-                pkg.contains("snapchat")) {
-            return false;
+    private void runPredictionEngine(List<Double> history) {
+        double predictedHours = PredictionAI.predictNextDayUsage(history);
+        String msg;
+        if (predictedHours > 4.0) {
+            msg = String.format("⚠️ WARNING: Trend increasing. Predicted: %.1f hours tomorrow.", predictedHours);
+            tvPrediction.setTextColor(Color.RED);
+        } else if (predictedHours < 2.0) {
+            msg = String.format("✅ GOOD TREND: Predicted: %.1f hours tomorrow.", predictedHours);
+            tvPrediction.setTextColor(Color.parseColor("#4CAF50"));
+        } else {
+            msg = String.format("ℹ️ STABLE: Predicted: %.1f hours tomorrow.", predictedHours);
+            tvPrediction.setTextColor(Color.BLACK);
         }
+        tvPrediction.setText(msg);
+    }
 
-        // 2. BLACKLIST: Explicitly IGNORE Home Screens / Launchers
-        // --- THIS IS THE FIX FOR THE 6 HOUR ERROR ---
-        if (pkg.contains("launcher") ||
-                pkg.contains("home") ||
-                pkg.contains("nexus") ||
-                pkg.contains("trebuchet") ||
-                pkg.equals("com.android.systemui")) {
-            return true; // Ignore (Don't count time)
-        }
+    private boolean isSystemApp(PackageManager pm, String pkg) {
+        // Whitelist
+        if (pkg.contains("youtube") || pkg.contains("chrome") || pkg.contains("whatsapp") ||
+                pkg.contains("instagram") || pkg.contains("facebook") || pkg.contains("snapchat")) return false;
+
+        // Blacklist Launchers (Critical for fixing High Time error)
+        if (pkg.contains("launcher") || pkg.contains("home") || pkg.contains("nexus") || pkg.contains("trebuchet")) return true;
 
         try {
             ApplicationInfo ai = pm.getApplicationInfo(pkg, 0);
-            // 3. Standard System Filter
-            return (ai.flags & ApplicationInfo.FLAG_SYSTEM) != 0 &&
-                    (ai.flags & ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) == 0;
-        } catch (Exception e) {
-            return true;
-        }
+            return (ai.flags & ApplicationInfo.FLAG_SYSTEM) != 0 && (ai.flags & ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) == 0;
+        } catch (Exception e) { return true; }
     }
 }
