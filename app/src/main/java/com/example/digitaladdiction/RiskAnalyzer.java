@@ -26,4 +26,13 @@ public class RiskAnalyzer {
         // Late night is 23 (11PM) to 5 (5AM)
         return (hour >= 23 || hour < 5);
     }
+    // Check if a specific timestamp falls in the Late Night Window (11 PM - 5 AM)
+    public static boolean isTimestampNight(long timestamp) {
+        java.util.Calendar cal = java.util.Calendar.getInstance();
+        cal.setTimeInMillis(timestamp);
+        int hour = cal.get(java.util.Calendar.HOUR_OF_DAY);
+
+        // Late night is 23 (11PM) to 5 (5AM)
+        return (hour >= 23 || hour < 5);
+    }
 }

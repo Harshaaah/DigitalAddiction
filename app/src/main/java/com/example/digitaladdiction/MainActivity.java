@@ -67,6 +67,7 @@ public class MainActivity extends AppCompatActivity {
     private RiskAnalyzer.RiskLevel currentRisk = RiskAnalyzer.RiskLevel.LOW;
 
     // --- FIX: Variable to store the Real Parent PIN ---
+    private double weightedDailyUsage = 0;
     private String parentPin = "1234"; // Default fallback (will be overwritten by Firebase)
 
     @Override
@@ -215,11 +216,15 @@ public class MainActivity extends AppCompatActivity {
     }
 
     // Paste the calculatePreciseUsage method here inside MainActivity as well...
+    // Copy this updated method into MainActivity.java
     private Map<String, Long> calculatePreciseUsage(UsageStatsManager usm, long startTime, long endTime) {
         Map<String, Long> durationMap = new HashMap<>();
         Map<String, Long> openEvents = new HashMap<>();
+        PackageManager pm = getPackageManager();
 
-        // Query EVENTS (Logs), not STATS (Buckets)
+        // Reset Weighted Score for UI Calculation
+        weightedDailyUsage = 0;
+
         UsageEvents events = usm.queryEvents(startTime, endTime);
         UsageEvents.Event event = new UsageEvents.Event();
 
@@ -227,37 +232,56 @@ public class MainActivity extends AppCompatActivity {
             events.getNextEvent(event);
             String pkg = event.getPackageName();
 
+            if (isSystemApp(pm, pkg)) continue;
+
             if (event.getEventType() == UsageEvents.Event.MOVE_TO_FOREGROUND) {
-                // App opened: Record Start Time
                 openEvents.put(pkg, event.getTimeStamp());
             }
             else if (event.getEventType() == UsageEvents.Event.MOVE_TO_BACKGROUND) {
-                // App closed: Calculate Duration
                 if (openEvents.containsKey(pkg)) {
                     long start = openEvents.get(pkg);
                     long duration = event.getTimeStamp() - start;
 
-                    // Add to total duration map
+                    // --- WEIGHTED LOGIC FOR UI COLOR ---
+                    if (isTimestampNight(start)) {
+                        weightedDailyUsage += (duration * 2.5); // Night Multiplier
+                    } else {
+                        weightedDailyUsage += duration;
+                    }
+                    // -----------------------------------
+
                     long currentTotal = durationMap.getOrDefault(pkg, 0L);
                     durationMap.put(pkg, currentTotal + duration);
-
-                    // Remove from open list
                     openEvents.remove(pkg);
                 }
             }
         }
 
-        // Handle apps that are CURRENTLY open (No "Background" event yet)
+        // Handle Currently Open Apps
         for (Map.Entry<String, Long> entry : openEvents.entrySet()) {
             String pkg = entry.getKey();
             long start = entry.getValue();
-            long duration = endTime - start; // Time until now
+            long duration = endTime - start;
+
+            if (isTimestampNight(start)) {
+                weightedDailyUsage += (duration * 2.5);
+            } else {
+                weightedDailyUsage += duration;
+            }
 
             long currentTotal = durationMap.getOrDefault(pkg, 0L);
             durationMap.put(pkg, currentTotal + duration);
         }
 
         return durationMap;
+    }
+
+    // Don't forget the helper!
+    private boolean isTimestampNight(long timestamp) {
+        java.util.Calendar cal = java.util.Calendar.getInstance();
+        cal.setTimeInMillis(timestamp);
+        int hour = cal.get(java.util.Calendar.HOUR_OF_DAY);
+        return (hour >= 23 || hour < 5);
     }
     // MAKE SURE TO COPY THE UPDATED isSystemApp from TrackingService to MainActivity too!
     private boolean isSystemApp(PackageManager pm, String pkg) {
@@ -279,12 +303,17 @@ public class MainActivity extends AppCompatActivity {
         long hours = totalDailyUsage / (1000 * 60 * 60);
         long minutes = (totalDailyUsage / 1000 / 60) % 60;
 
-        currentRisk = RiskAnalyzer.calculateRisk(totalDailyUsage);
+        // --- FIX: Use Weighted Score for Color, but Real Time for Text ---
+        currentRisk = RiskAnalyzer.calculateRisk((long) weightedDailyUsage);
 
         runOnUiThread(() -> {
+            // Text shows REAL time
             tvTotalTime.setText(hours + "h " + minutes + "m used today");
+
+            // Text shows Risk Level (might be SEVERE even if time is low)
             tvRiskLevel.setText(currentRisk.toString());
 
+            // Color follows the Weighted Risk
             switch (currentRisk) {
                 case LOW:
                     layoutRisk.setBackgroundColor(Color.parseColor("#4CAF50"));

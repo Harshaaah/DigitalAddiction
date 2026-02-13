@@ -48,7 +48,8 @@ public class TrackingService extends Service {
     private List<String> blockedAppsList = new ArrayList<>();
     private boolean hasSentDailyLimitAlert = false;
     private long lastLateNightAlertTime = 0;
-
+    // Stores the "Risk Score" (Time * Multiplier)
+    private double weightedDailyUsage = 0;
     @Override
     public void onCreate() {
         super.onCreate();
@@ -115,36 +116,47 @@ public class TrackingService extends Service {
         calendar.set(java.util.Calendar.MILLISECOND, 0);
         long startTime = calendar.getTimeInMillis();
 
-        // 2. Instant Detection (For Blocking/Binging)
+        // 2. Instant Detection
         String instantTopApp = getForegroundApp(usm, endTime);
 
-        // --- FIX: USE PRECISE EVENT CALCULATION ---
-        // We calculate time manually to avoid "Yesterday's Data" bugs
+        // 3. Calculate Time AND Weighted Risk
+        // (This helper now updates 'weightedDailyUsage' automatically)
         Map<String, Long> preciseDurationMap = calculatePreciseUsage(usm, startTime, endTime);
         Map<String, Integer> launchCounts = getLaunchCounts(usm, startTime, endTime);
 
-        long totalDailyUsage = 0;
+        long totalDailyUsage = 0; // Real physical time (for Database)
 
-        // Iterate through our manually calculated list
+        // Sum up REAL time for upload/display
         for (Map.Entry<String, Long> entry : preciseDurationMap.entrySet()) {
             String pkg = entry.getKey();
             long duration = entry.getValue();
-
-            if (duration > 0 && !isSystemApp(getPackageManager(), pkg)) {
+            // System apps are already filtered in calculatePreciseUsage, but double check doesn't hurt
+            if (duration > 0) {
                 totalDailyUsage += duration;
             }
         }
 
-        // 3. Risk Alerts (Based on the new accurate Total)
-        RiskAnalyzer.RiskLevel risk = RiskAnalyzer.calculateRisk(totalDailyUsage);
+        // 4. Risk Alerts (Using WEIGHTED Risk)
+        // If user played 2 hours at night, 'weightedDailyUsage' will be 5 hours -> HIGH RISK
+        RiskAnalyzer.RiskLevel risk = RiskAnalyzer.calculateRisk((long) weightedDailyUsage);
+
         if ((risk == RiskAnalyzer.RiskLevel.HIGH || risk == RiskAnalyzer.RiskLevel.SEVERE)
                 && !hasSentDailyLimitAlert) {
-            NotificationHelper.sendRiskAlert(this, risk.toString());
+
+            String msg = risk.toString();
+            // Add context if night usage caused the spike
+            if (weightedDailyUsage > totalDailyUsage * 1.5) {
+                msg += " (Elevated due to Late Night usage)";
+            }
+
+            NotificationHelper.sendRiskAlert(this, msg);
             hasSentDailyLimitAlert = true;
         }
+
+        // Reset flag if usage is low (new day)
         if (totalDailyUsage < 1000 * 60 * 60) hasSentDailyLimitAlert = false;
 
-        // 4. Late Night Check
+        // 5. Late Night Check
         if (RiskAnalyzer.isLateNight()) {
             long currentTime = System.currentTimeMillis();
             if (currentTime - lastLateNightAlertTime > (15 * 60 * 1000)) {
@@ -153,7 +165,7 @@ public class TrackingService extends Service {
             }
         }
 
-        // 5. Binge & Blocking Logic
+        // 6. Binge & Blocking Logic
         if (instantTopApp != null && !instantTopApp.isEmpty()
                 && !isSystemApp(getPackageManager(), instantTopApp)) {
 
@@ -165,7 +177,7 @@ public class TrackingService extends Service {
                 return;
             }
 
-            // Binge Logic (Detect App Switch)
+            // Binge Logic
             if (!instantTopApp.equals(currentForegroundApp)) {
                 currentForegroundApp = instantTopApp;
                 appSessionStart.put(currentForegroundApp, System.currentTimeMillis());
@@ -173,8 +185,8 @@ public class TrackingService extends Service {
                 Long start = appSessionStart.get(currentForegroundApp);
                 if (start != null) {
                     long sessionDuration = System.currentTimeMillis() - start;
-                    // --- TEST MODE: 1 MINUTE (60000 ms) 1800000 ---
-                    if (sessionDuration > 1800000) { // 1/2 Hour
+                    // Binge Limit: 30 Mins (1800000)
+                    if (sessionDuration > 1800000) {
                         String timeString = (sessionDuration / 60000) + " mins";
                         NotificationHelper.sendBingeAlert(this, getAppName(currentForegroundApp), timeString);
                         appSessionStart.put(currentForegroundApp, System.currentTimeMillis());
@@ -183,16 +195,18 @@ public class TrackingService extends Service {
             }
         }
 
-        // 6. Upload Data (Using the new Precise Map)
+        // 7. Upload Data (Sends REAL Time, not Weighted Time)
         uploadDataPrecise(preciseDurationMap, launchCounts);
     }
-
     // --- NEW HELPER: THE MATH ENGINE (Copy this into TrackingService) ---
     private Map<String, Long> calculatePreciseUsage(UsageStatsManager usm, long startTime, long endTime) {
         Map<String, Long> durationMap = new HashMap<>();
         Map<String, Long> openEvents = new HashMap<>();
+        PackageManager pm = getPackageManager();
 
-        // Query EVENTS (Logs), not STATS (Buckets)
+        // Reset Weighted Score for this calculation loop
+        weightedDailyUsage = 0;
+
         UsageEvents events = usm.queryEvents(startTime, endTime);
         UsageEvents.Event event = new UsageEvents.Event();
 
@@ -200,31 +214,44 @@ public class TrackingService extends Service {
             events.getNextEvent(event);
             String pkg = event.getPackageName();
 
+            // Filter System Apps IMMEDIATELY (so Launcher doesn't count towards Risk)
+            if (isSystemApp(pm, pkg)) continue;
+
             if (event.getEventType() == UsageEvents.Event.MOVE_TO_FOREGROUND) {
-                // App opened: Record Start Time
                 openEvents.put(pkg, event.getTimeStamp());
             }
             else if (event.getEventType() == UsageEvents.Event.MOVE_TO_BACKGROUND) {
-                // App closed: Calculate Duration
                 if (openEvents.containsKey(pkg)) {
                     long start = openEvents.get(pkg);
                     long duration = event.getTimeStamp() - start;
 
-                    // Add to total duration map
+                    // --- WEIGHTED LOGIC ---
+                    if (isTimestampNight(start)) {
+                        weightedDailyUsage += (duration * 2.5); // 2.5x Penalty for Night
+                    } else {
+                        weightedDailyUsage += duration; // 1.0x Standard
+                    }
+                    // ----------------------
+
                     long currentTotal = durationMap.getOrDefault(pkg, 0L);
                     durationMap.put(pkg, currentTotal + duration);
-
-                    // Remove from open list
                     openEvents.remove(pkg);
                 }
             }
         }
 
-        // Handle apps that are CURRENTLY open (No "Background" event yet)
+        // Handle Currently Open Apps
         for (Map.Entry<String, Long> entry : openEvents.entrySet()) {
             String pkg = entry.getKey();
             long start = entry.getValue();
-            long duration = endTime - start; // Time until now
+            long duration = endTime - start;
+
+            // Apply Weight to current session too
+            if (isTimestampNight(start)) {
+                weightedDailyUsage += (duration * 2.5);
+            } else {
+                weightedDailyUsage += duration;
+            }
 
             long currentTotal = durationMap.getOrDefault(pkg, 0L);
             durationMap.put(pkg, currentTotal + duration);
@@ -233,6 +260,13 @@ public class TrackingService extends Service {
         return durationMap;
     }
 
+    // Helper to check time window (11 PM - 5 AM)
+    private boolean isTimestampNight(long timestamp) {
+        java.util.Calendar cal = java.util.Calendar.getInstance();
+        cal.setTimeInMillis(timestamp);
+        int hour = cal.get(java.util.Calendar.HOUR_OF_DAY);
+        return (hour >= 23 || hour < 5);
+    }
     // --- NEW UPLOAD HELPER (Compatible with new Map) ---
     private void uploadDataPrecise(Map<String, Long> durationMap, Map<String, Integer> launchCounts) {
         if (mDatabase == null) return;
