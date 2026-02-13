@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Parent Login - Digital Addiction AI</title>
+    <link rel="stylesheet" href="style.css">
+    
+    <!-- Firebase SDKs -->
+    <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-database-compat.js"></script>
+</head>
+<body>
+
+    <div class="login-container">
+        <h2>Parent Dashboard</h2>
+        <p>Login to manage your child's device</p>
+        
+        <input type="email" id="email" placeholder="Parent Email">
+        <input type="password" id="password" placeholder="Password">
+        <button onclick="login()">Login</button>
+        
+        <p id="error-msg" style="color: red;"></p>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

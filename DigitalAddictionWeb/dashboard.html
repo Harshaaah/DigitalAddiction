@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Control Panel - Digital Addiction AI</title>
+    <link rel="stylesheet" href="style.css">
+
+    <!-- Firebase SDKs -->
+    <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-database-compat.js"></script>
+</head>
+<body>
+
+    <div class="dashboard-container">
+        <h2>Parent Control Center</h2>
+        <p>Manage access to your child's apps below.</p>
+        <hr>
+        
+        <!-- The list of apps will appear here dynamically -->
+        <div id="app-list">
+            <p>Loading apps...</p>
+        </div>
+
+        <br>
+        <button onclick="logout()" style="background-color: #555;">Logout</button>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

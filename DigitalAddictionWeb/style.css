@@ -1,0 +1,77 @@
+body {
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    background-color: #f0f2f5;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100vh;
+    margin: 0;
+}
+
+.login-container, .dashboard-container {
+    background: white;
+    padding: 30px;
+    border-radius: 10px;
+    box-shadow: 0 4px 10px rgba(0,0,0,0.1);
+    width: 350px;
+    text-align: center;
+}
+
+input {
+    width: 90%;
+    padding: 10px;
+    margin: 10px 0;
+    border: 1px solid #ddd;
+    border-radius: 5px;
+}
+
+button {
+    width: 100%;
+    padding: 10px;
+    background-color: #4CAF50;
+    color: white;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+    font-size: 16px;
+}
+
+button:hover { background-color: #45a049; }
+
+/* Dashboard Specifics */
+.app-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px;
+    border-bottom: 1px solid #eee;
+}
+
+.blocked { color: red; font-weight: bold; }
+.allowed { color: green; font-weight: bold; }
+
+.toggle-btn {
+    padding: 5px 10px;
+    cursor: pointer;
+    border: none;
+    border-radius: 3px;
+}
+.btn-block { background-color: #ff4444; color: white; }
+.btn-allow { background-color: #ccc; color: black; }
+/* Add this to style.css */
+#app-list {
+    max-height: 400px;       /* Limit the height */
+    overflow-y: auto;        /* Enable vertical scrolling */
+    padding-right: 10px;     /* Space for scrollbar */
+    margin-bottom: 20px;
+    border-top: 1px solid #eee;
+    border-bottom: 1px solid #eee;
+}
+
+/* Optional: Make the whole container flexible */
+.dashboard-container {
+    max-height: 90vh;        /* Prevent it from going off-screen */
+    overflow: hidden;        /* Keep the container bounds */
+    display: flex;
+    flex-direction: column;
+}
