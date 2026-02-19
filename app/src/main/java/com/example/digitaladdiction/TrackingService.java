@@ -50,6 +50,10 @@ public class TrackingService extends Service {
     private long lastLateNightAlertTime = 0;
     // Stores the "Risk Score" (Time * Multiplier)
     private double weightedDailyUsage = 0;
+
+    // Stores limits in milliseconds (e.g., "com.youtube" -> 1800000)
+    private Map<String, Long> appTimeLimits = new HashMap<>();
+
     @Override
     public void onCreate() {
         super.onCreate();
@@ -63,16 +67,42 @@ public class TrackingService extends Service {
                 @Override
                 public void onDataChange(DataSnapshot snapshot) {
                     blockedAppsList.clear();
-                    for (DataSnapshot child : snapshot.getChildren()) {
-                        if (Boolean.TRUE.equals(child.getValue(Boolean.class))) {
+//                    for (DataSnapshot child : snapshot.getChildren()) {
+//                        if (Boolean.TRUE.equals(child.getValue(Boolean.class))) {
+//                            blockedAppsList.add(child.getKey().replace("_", "."));
+                    for (com.google.firebase.database.DataSnapshot child : snapshot.getChildren()) {
+                        // Only get boolean blocks here
+                        if (child.getValue() instanceof Boolean && (Boolean) child.getValue()) {
                             blockedAppsList.add(child.getKey().replace("_", "."));
                         }
                     }
                 }
                 @Override
-                public void onCancelled(DatabaseError error) {}
+//                public void onCancelled(DatabaseError error) {}
+                public void onCancelled(com.google.firebase.database.DatabaseError error) {}
+            });
+            // --- 2. NEW: TIME LIMITS LISTENER ---
+            DatabaseReference limitsRef = FirebaseDatabase.getInstance().getReference("users").child(currentUserId).child("restrictions").child("limits");
+            limitsRef.addValueEventListener(new com.google.firebase.database.ValueEventListener() {
+                @Override
+                public void onDataChange(com.google.firebase.database.DataSnapshot snapshot) {
+                    appTimeLimits.clear();
+                    for (com.google.firebase.database.DataSnapshot child : snapshot.getChildren()) {
+                        String pkg = child.getKey().replace("_", ".");
+                        // Firebase stores minutes (Long). Convert to Milliseconds.
+                        Long limitMins = child.getValue(Long.class);
+                        if (limitMins != null) {
+                            appTimeLimits.put(pkg, limitMins * 60 * 1000);
+                            Log.d(TAG, "Limit Set: " + pkg + " = " + limitMins + " mins");
+                        }
+                    }
+                }
+                @Override
+                public void onCancelled(com.google.firebase.database.DatabaseError error) {}
             });
         }
+
+
         createNotificationChannel();
     }
 
@@ -166,34 +196,100 @@ public class TrackingService extends Service {
         }
 
         // 6. Binge & Blocking Logic
+//
+//        if (instantTopApp != null && !instantTopApp.isEmpty()
+//                && !isSystemApp(getPackageManager(), instantTopApp)) {
+//
+//            // Blocking
+//            if (blockedAppsList.contains(instantTopApp)) {
+//                Intent blockIntent = new Intent(this, BlockScreenActivity.class);
+//                blockIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+//                startActivity(blockIntent);
+//                return;
+//            }
+//
+//            // Binge Logic
+//            if (!instantTopApp.equals(currentForegroundApp)) {
+//                currentForegroundApp = instantTopApp;
+//                appSessionStart.put(currentForegroundApp, System.currentTimeMillis());
+//            } else {
+//                Long start = appSessionStart.get(currentForegroundApp);
+//                if (start != null) {
+//                    long sessionDuration = System.currentTimeMillis() - start;
+//                    // Binge Limit: 30 Mins (1800000)
+//                    if (sessionDuration > 1800000) {
+//                        String timeString = (sessionDuration / 60000) + " mins";
+//                        NotificationHelper.sendBingeAlert(this, getAppName(currentForegroundApp), timeString);
+//                        appSessionStart.put(currentForegroundApp, System.currentTimeMillis());
+//                    }
+//                }
+//            }
+        // 6. Binge & Blocking Logic
         if (instantTopApp != null && !instantTopApp.isEmpty()
                 && !isSystemApp(getPackageManager(), instantTopApp)) {
 
-            // Blocking
+            boolean shouldBlock = false;
+
+            // --- A. Manual Block Check ---
             if (blockedAppsList.contains(instantTopApp)) {
+                shouldBlock = true;
+            }
+
+            // --- B. Time Limit Check (New Feature) ---
+            // Check if there is a specific time limit set for this app
+            if (appTimeLimits.containsKey(instantTopApp)) {
+
+                // Get how much we used this app TODAY (from the map we calculated earlier)
+                long timeUsedToday = 0;
+                if (preciseDurationMap.containsKey(instantTopApp)) {
+                    timeUsedToday = preciseDurationMap.get(instantTopApp);
+                }
+
+                // Get the limit stored in the Map
+                long limit = appTimeLimits.get(instantTopApp);
+
+                // If usage exceeds limit -> Block it
+                if (timeUsedToday > limit) {
+                    Log.d(TAG, "Time Limit Exceeded for: " + instantTopApp);
+                    shouldBlock = true;
+                }
+            }
+
+            // --- C. Execute Block (If A or B is true) ---
+            if (shouldBlock) {
                 Intent blockIntent = new Intent(this, BlockScreenActivity.class);
                 blockIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
                 startActivity(blockIntent);
-                return;
+
+                return; // ⛔ STOP HERE. Do not process binge logic for blocked apps.
             }
 
-            // Binge Logic
+            // --- D. Binge Logic (Only runs if App is Allowed) ---
+
+            // 1. Detect App Switch
+            // If the app on screen is different from the last tracked app, reset the timer.
             if (!instantTopApp.equals(currentForegroundApp)) {
                 currentForegroundApp = instantTopApp;
                 appSessionStart.put(currentForegroundApp, System.currentTimeMillis());
             } else {
+                // 2. Same App -> Check Session Duration
                 Long start = appSessionStart.get(currentForegroundApp);
                 if (start != null) {
                     long sessionDuration = System.currentTimeMillis() - start;
-                    // Binge Limit: 30 Mins (1800000)
+
+                    // Binge Limit: 30 Mins (1800000 ms)
+                    // (Change to 60000 for 1-minute testing)
                     if (sessionDuration > 1800000) {
                         String timeString = (sessionDuration / 60000) + " mins";
                         NotificationHelper.sendBingeAlert(this, getAppName(currentForegroundApp), timeString);
+
+                        // Reset timer to prevent spamming the notification every 10 seconds
                         appSessionStart.put(currentForegroundApp, System.currentTimeMillis());
                     }
                 }
             }
         }
+
 
         // 7. Upload Data (Sends REAL Time, not Weighted Time)
         uploadDataPrecise(preciseDurationMap, launchCounts);
