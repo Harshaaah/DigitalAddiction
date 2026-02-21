@@ -134,8 +134,11 @@ public class MainActivity extends AppCompatActivity {
             finish();
         }));
 
+
         btnParentSettings.setOnClickListener(v -> showPinDialog(() -> {
-            Toast.makeText(this, "Parent Settings Unlocked", Toast.LENGTH_SHORT).show();
+            // Correctly redirect to the Settings Screen now
+            Intent intent = new Intent(MainActivity.this, ParentSettingsActivity.class);
+            startActivity(intent);
         }));
 
         btnWebDashboard.setOnClickListener(v -> showPinDialog(() -> {
