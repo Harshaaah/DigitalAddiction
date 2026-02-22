@@ -38,6 +38,8 @@
             android:excludeFromRecents="true"
             android:taskAffinity=""
             android:windowSoftInputMode="stateAlwaysHidden"/>
+        <activity android:name=".ParentSettingsActivity"
+            android:parentActivityName=".MainActivity"/>
         <!-- NEW: Register the Service -->
         <service android:name=".TrackingService"
             android:enabled="true"
