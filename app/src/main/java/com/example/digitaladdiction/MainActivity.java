@@ -69,14 +69,15 @@ public class MainActivity extends AppCompatActivity {
     // --- FIX: Variable to store the Real Parent PIN ---
     private double weightedDailyUsage = 0;
     private String parentPin = "1234"; // Default fallback (will be overwritten by Firebase)
-
+    private TextView tvRecommendation;
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
         Button btnWeekly = findViewById(R.id.btnWeeklyReport);
 
-
+        // Inside onCreate...
+        tvRecommendation = findViewById(R.id.tvRecommendation);
         // --- UPDATED: No PIN required for Weekly Report ---
         btnWeekly.setOnClickListener(v -> {
             // Directly open the activity without asking for PIN
@@ -330,6 +331,68 @@ public class MainActivity extends AppCompatActivity {
                     break;
             }
         });
+        generateAndDisplayRecommendation();
+    }
+    private void generateAndDisplayRecommendation() {
+        UsageStatsManager usm = (UsageStatsManager) getSystemService(Context.USAGE_STATS_SERVICE);
+        PackageManager pm = getPackageManager();
+
+        // 1. Get Timestamps
+        Calendar cal = Calendar.getInstance();
+        cal.set(Calendar.HOUR_OF_DAY, 0); cal.set(Calendar.MINUTE, 0); cal.set(Calendar.SECOND, 0);
+        long todayStart = cal.getTimeInMillis();
+        long now = System.currentTimeMillis();
+
+        long yesterdayStart = todayStart - (24 * 60 * 60 * 1000);
+
+        // 2. Fetch Usage Stats
+        Map<String, UsageStats> todayStats = usm.queryAndAggregateUsageStats(todayStart, now);
+        Map<String, UsageStats> yesterdayStats = usm.queryAndAggregateUsageStats(yesterdayStart, todayStart);
+
+        long socialTime = 0, gameTime = 0, videoTime = 0;
+        long yesterdayTotal = 0;
+
+        // Calculate Yesterday's Total (For Trend Analysis)
+        if (yesterdayStats != null) {
+            for (UsageStats u : yesterdayStats.values()) {
+                if (u.getLastTimeUsed() > yesterdayStart && !isSystemApp(pm, u.getPackageName())) {
+                    yesterdayTotal += u.getTotalTimeInForeground();
+                }
+            }
+        }
+
+        // Calculate Today's Category Breakdown
+        if (todayStats != null) {
+            for (UsageStats u : todayStats.values()) {
+                if (u.getLastTimeUsed() > todayStart && !isSystemApp(pm, u.getPackageName())) {
+                    long time = u.getTotalTimeInForeground();
+                    String cat = CategoryHelper.getCategory(this, u.getPackageName());
+
+                    if (cat.equals("Social Media")) socialTime += time;
+                    else if (cat.equals("Games")) gameTime += time;
+                    else if (cat.equals("Entertainment")) videoTime += time;
+                }
+            }
+        }
+
+        // 3. Determine Dominant Category
+        String dominantCat = "Other";
+        long maxTime = Math.max(socialTime, Math.max(gameTime, videoTime));
+        if (maxTime > 0) {
+            if (maxTime == socialTime) dominantCat = "Social Media";
+            else if (maxTime == gameTime) dominantCat = "Games";
+            else if (maxTime == videoTime) dominantCat = "Entertainment";
+        }
+
+        // 4. Determine Vectors
+        boolean isLateNight = RiskAnalyzer.isLateNight();
+        boolean isTrendUp = totalDailyUsage > yesterdayTotal; // Compare today vs yesterday
+
+        // 5. Ask the AI Decision Tree
+        String advice = RecommendationAI.generateRecommendation(isLateNight, isTrendUp, dominantCat, totalDailyUsage);
+
+        // 6. Display on UI
+        runOnUiThread(() -> tvRecommendation.setText(advice));
     }
 
     // --- Helper: Pie Chart ---

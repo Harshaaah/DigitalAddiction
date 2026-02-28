@@ -77,6 +77,43 @@
             android:layout_height="wrap_content"/>
     </LinearLayout>
 
+    <!-- AI RECOMMENDATION CARD -->
+    <LinearLayout
+        android:orientation="vertical"
+        android:background="#E3F2FD"
+        android:padding="16dp"
+        android:elevation="4dp"
+        android:layout_marginTop="10dp"
+        android:layout_marginBottom="20dp"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content">
+
+        <LinearLayout
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:layout_marginBottom="8dp"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content">
+
+            <TextView
+                android:text="✨ AI Insight"
+                android:textStyle="bold"
+                android:textColor="#1565C0"
+                android:textSize="18sp"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"/>
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/tvRecommendation"
+            android:text="Analyzing behavioral patterns..."
+            android:textSize="14sp"
+            android:textColor="#333333"
+            android:lineSpacingExtra="4dp"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"/>
+    </LinearLayout>
+
     <!-- PARENT CONTROLS -->
     <Button
         android:id="@+id/btnWeeklyReport"
