@@ -54,6 +54,12 @@ public class TrackingService extends Service {
     // Stores limits in milliseconds (e.g., "com.youtube" -> 1800000)
     private Map<String, Long> appTimeLimits = new HashMap<>();
 
+
+    // --- NEW VARIABLES FOR BASELINE LOGIC ---
+    private Map<String, Long> baselineUsageMap = new HashMap<>(); // Stores usage at the exact time limit was set
+    private Map<String, Long> currentKnownLimits = new HashMap<>(); // Helps detect if a parent changed a limit
+    // ----------------------------------------
+
     @Override
     public void onCreate() {
         super.onCreate();
@@ -235,25 +241,69 @@ public class TrackingService extends Service {
                 shouldBlock = true;
             }
 
-            // --- B. Time Limit Check (New Feature) ---
-            // Check if there is a specific time limit set for this app
+//            // --- B. Time Limit Check (New Feature) ---
+//            // Check if there is a specific time limit set for this app
+//            if (appTimeLimits.containsKey(instantTopApp)) {
+//
+//                // Get how much we used this app TODAY (from the map we calculated earlier)
+//                long timeUsedToday = 0;
+//                if (preciseDurationMap.containsKey(instantTopApp)) {
+//                    timeUsedToday = preciseDurationMap.get(instantTopApp);
+//                }
+//
+//                // Get the limit stored in the Map
+//                long limit = appTimeLimits.get(instantTopApp);
+//
+//                // If usage exceeds limit -> Block it
+//                if (timeUsedToday > limit) {
+//                    Log.d(TAG, "Time Limit Exceeded for: " + instantTopApp);
+//                    shouldBlock = true;
+//                }
+//            }
+            // --- B. Time Limit Check (Baseline Logic) ---
+
+            // 1. First, check for NEW or CHANGED limits from the parent
+            for (Map.Entry<String, Long> entry : appTimeLimits.entrySet()) {
+                String pkg = entry.getKey();
+                Long newLimit = entry.getValue();
+                Long oldLimit = currentKnownLimits.get(pkg);
+
+                // If the parent just added a limit, OR changed an existing limit
+                if (oldLimit == null || !oldLimit.equals(newLimit)) {
+                    // Record exactly how much time the child has already used TODAY
+                    long currentUsage = preciseDurationMap.getOrDefault(pkg, 0L);
+
+                    // Set this as the "Baseline" (Start counting from 0 from here)
+                    baselineUsageMap.put(pkg, currentUsage);
+                    currentKnownLimits.put(pkg, newLimit);
+                    Log.d(TAG, "New Baseline set for " + pkg + ". Starting new timer.");
+                }
+            }
+
+            // Clean up old baselines if the parent deleted a limit
+            baselineUsageMap.keySet().retainAll(appTimeLimits.keySet());
+            currentKnownLimits.keySet().retainAll(appTimeLimits.keySet());
+
+            // 2. Now, enforce the limit for the current app on screen
             if (appTimeLimits.containsKey(instantTopApp)) {
 
-                // Get how much we used this app TODAY (from the map we calculated earlier)
-                long timeUsedToday = 0;
-                if (preciseDurationMap.containsKey(instantTopApp)) {
-                    timeUsedToday = preciseDurationMap.get(instantTopApp);
-                }
+                // Get total used today
+                long totalUsedToday = preciseDurationMap.getOrDefault(instantTopApp, 0L);
 
-                // Get the limit stored in the Map
+                // Get the baseline (What was used BEFORE the limit was set)
+                long baseline = baselineUsageMap.getOrDefault(instantTopApp, 0L);
+
+                // THE MATH: Total Today - Past Usage = NEW Usage
+                long timeUsedSinceLimitSet = totalUsedToday - baseline;
                 long limit = appTimeLimits.get(instantTopApp);
 
-                // If usage exceeds limit -> Block it
-                if (timeUsedToday > limit) {
-                    Log.d(TAG, "Time Limit Exceeded for: " + instantTopApp);
+                // If the NEW usage exceeds the limit -> Block it
+                if (timeUsedSinceLimitSet > limit) {
+                    Log.d(TAG, "New Session Time Limit Exceeded for: " + instantTopApp);
                     shouldBlock = true;
                 }
             }
+            // ---------------------------------------------
 
             // --- C. Execute Block (If A or B is true) ---
             if (shouldBlock) {
