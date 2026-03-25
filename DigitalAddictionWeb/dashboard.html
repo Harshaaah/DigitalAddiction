@@ -3,30 +3,387 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Control Panel - Digital Addiction AI</title>
-    <link rel="stylesheet" href="style.css">
+    <title>Immediate Blocking</title>
 
     <!-- Firebase SDKs -->
     <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-auth-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-database-compat.js"></script>
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800;900&display=swap" rel="stylesheet">
+
+    <style>
+        *, *::before, *::after {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        :root {
+            --bg: #f0f2fb;
+            --card-bg: #ffffff;
+            --accent-blue: #5b8dee;
+            --accent-green: #4cd9a0;
+            --accent-red: #ff6b6b;
+            --text-primary: #1e2340;
+            --text-secondary: #8a90b0;
+            --shadow: 0 4px 20px rgba(91, 141, 238, 0.10);
+            --shadow-card: 0 2px 12px rgba(30, 35, 64, 0.07);
+            --radius: 20px;
+            --radius-sm: 14px;
+        }
+
+        body {
+            font-family: 'Nunito', sans-serif;
+            background: var(--bg);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: flex-start;
+            padding: 0 0 100px 0;
+        }
+
+        .phone-wrap {
+            width: 100%;
+            max-width: 420px;
+            min-height: 100vh;
+            background: var(--bg);
+            position: relative;
+            padding-bottom: 90px;
+        }
+
+        /* ── HEADER ── */
+        .header {
+            background: linear-gradient(135deg, #6a9af4 0%, #8b6ff7 100%);
+            border-radius: 0 0 32px 32px;
+            padding: 48px 24px 28px;
+            text-align: center;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .header::before {
+            content: '';
+            position: absolute;
+            top: -40px; right: -40px;
+            width: 160px; height: 160px;
+            border-radius: 50%;
+            background: rgba(255,255,255,0.10);
+        }
+
+        .header::after {
+            content: '';
+            position: absolute;
+            bottom: -30px; left: -30px;
+            width: 120px; height: 120px;
+            border-radius: 50%;
+            background: rgba(255,255,255,0.07);
+        }
+
+        .header h1 {
+            font-size: 24px;
+            font-weight: 900;
+            color: #fff;
+            letter-spacing: -0.3px;
+            position: relative;
+            z-index: 1;
+        }
+
+        .header p {
+            font-size: 13px;
+            color: rgba(255,255,255,0.75);
+            margin-top: 4px;
+            font-weight: 600;
+            position: relative;
+            z-index: 1;
+        }
+
+        /* ── CHART SECTION ── */
+        .chart-section {
+            background: var(--card-bg);
+            margin: -1px 20px 0;
+            border-radius: var(--radius);
+            padding: 20px 16px 16px;
+            box-shadow: var(--shadow);
+            position: relative;
+            z-index: 2;
+            margin-top: -20px;
+        }
+
+        .chart-title {
+            text-align: center;
+            font-size: 12px;
+            font-weight: 700;
+            color: var(--text-secondary);
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+            margin-bottom: 10px;
+        }
+
+        .chart-wrap {
+            width: 160px;
+            height: 160px;
+            margin: 0 auto;
+        }
+
+        /* ── APP LIST ── */
+        .section-label {
+            font-size: 13px;
+            font-weight: 800;
+            color: var(--text-secondary);
+            letter-spacing: 0.6px;
+            text-transform: uppercase;
+            padding: 20px 24px 10px;
+        }
+
+        #app-list {
+            padding: 0 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .app-item {
+            background: var(--card-bg);
+            border-radius: var(--radius-sm);
+            padding: 16px 18px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            box-shadow: var(--shadow-card);
+            animation: slideUp 0.35s ease both;
+        }
+
+        @keyframes slideUp {
+            from { opacity: 0; transform: translateY(16px); }
+            to   { opacity: 1; transform: translateY(0); }
+        }
+
+        .app-icon {
+            width: 44px;
+            height: 44px;
+            border-radius: 12px;
+            background: linear-gradient(135deg, #e8edff, #d4e0ff);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 20px;
+            flex-shrink: 0;
+            margin-right: 14px;
+        }
+
+        .app-info {
+            flex: 1;
+        }
+
+        .app-name {
+            font-size: 15px;
+            font-weight: 800;
+            color: var(--text-primary);
+            line-height: 1.2;
+        }
+
+        .app-usage {
+            font-size: 12px;
+            color: var(--text-secondary);
+            font-weight: 600;
+            margin-top: 2px;
+        }
+
+        /* ── TOGGLE BUTTON ── */
+        .toggle-btn {
+            border: none;
+            border-radius: 30px;
+            padding: 8px 18px;
+            font-size: 12px;
+            font-weight: 800;
+            font-family: 'Nunito', sans-serif;
+            cursor: pointer;
+            letter-spacing: 0.4px;
+            transition: transform 0.15s, box-shadow 0.15s;
+            flex-shrink: 0;
+        }
+
+        .toggle-btn:active {
+            transform: scale(0.95);
+        }
+
+        .btn-active {
+            background: linear-gradient(135deg, #4cd9a0, #38c98d);
+            color: #fff;
+            box-shadow: 0 4px 14px rgba(76, 217, 160, 0.40);
+        }
+
+        .btn-blocked {
+            background: linear-gradient(135deg, #ff6b6b, #f74444);
+            color: #fff;
+            box-shadow: 0 4px 14px rgba(255, 107, 107, 0.40);
+        }
+
+        /* ── EMPTY / LOADING STATE ── */
+        .empty-state {
+            text-align: center;
+            padding: 40px 20px;
+            color: var(--text-secondary);
+            font-size: 14px;
+            font-weight: 600;
+            line-height: 1.6;
+        }
+
+        .empty-state .icon {
+            font-size: 40px;
+            margin-bottom: 10px;
+            display: block;
+        }
+
+        /* ── LOGOUT BAR ── */
+        .logout-bar {
+            position: fixed;
+            bottom: 0;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 100%;
+            max-width: 420px;
+            padding: 14px 24px;
+            background: var(--card-bg);
+            border-top: 1px solid rgba(0,0,0,0.06);
+            z-index: 100;
+        }
+
+        .logout-btn {
+            width: 100%;
+            padding: 14px;
+            border: none;
+            border-radius: var(--radius-sm);
+            background: linear-gradient(135deg, #6a9af4, #8b6ff7);
+            color: #fff;
+            font-size: 15px;
+            font-weight: 800;
+            font-family: 'Nunito', sans-serif;
+            cursor: pointer;
+            letter-spacing: 0.3px;
+            transition: opacity 0.2s, transform 0.15s;
+            box-shadow: 0 4px 16px rgba(106, 154, 244, 0.35);
+        }
+
+        .logout-btn:hover  { opacity: 0.92; }
+        .logout-btn:active { transform: scale(0.98); }
+
+        /* ── FILTER PILLS ── */
+        .filter-bar {
+            display: flex;
+            gap: 8px;
+            padding: 0 20px 4px;
+            overflow-x: auto;
+            scrollbar-width: none;
+        }
+        .filter-bar::-webkit-scrollbar { display: none; }
+
+        .filter-pill {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 8px 16px;
+            border-radius: 30px;
+            border: 2px solid transparent;
+            background: var(--card-bg);
+            color: var(--text-secondary);
+            font-family: 'Nunito', sans-serif;
+            font-size: 12px;
+            font-weight: 800;
+            letter-spacing: 0.3px;
+            cursor: pointer;
+            white-space: nowrap;
+            box-shadow: var(--shadow-card);
+            transition: all 0.2s ease;
+        }
+
+        .filter-pill .pill-icon {
+            font-size: 14px;
+            line-height: 1;
+        }
+
+        .filter-pill:hover {
+            border-color: #c5d3f8;
+            color: var(--accent-blue);
+        }
+
+        .filter-pill.active {
+            background: linear-gradient(135deg, #6a9af4, #8b6ff7);
+            color: #fff;
+            border-color: transparent;
+            box-shadow: 0 4px 14px rgba(106, 154, 244, 0.35);
+        }
+
+        .filter-pill.active .pill-icon {
+            filter: brightness(10);
+        }
+
+        /* ── LOADING PULSE ── */
+        .skeleton {
+            background: linear-gradient(90deg, #e8eaf6 25%, #f0f2fb 50%, #e8eaf6 75%);
+            background-size: 200% 100%;
+            animation: shimmer 1.4s infinite;
+            border-radius: 10px;
+            height: 16px;
+        }
+
+        @keyframes shimmer {
+            0%   { background-position: 200% 0; }
+            100% { background-position: -200% 0; }
+        }
+    </style>
 </head>
 <body>
 
-    <div class="dashboard-container">
-        <h2>Immediate Blocking System</h2>
-        <p>Manage access to your child's apps below.</p>
-        <hr>
-        
-        <!-- The list of apps will appear here dynamically -->
-        <div id="app-list">
-            <p>Loading apps...</p>
-        </div>
+<div class="phone-wrap">
 
-        <br>
-        <button onclick="logout()" style="background-color: #555;">Logout</button>
+    <!-- HEADER -->
+    <div class="header">
+        <h1>Immediate Blocking</h1>
+        <p>Today's Usage (Minutes)</p>
     </div>
 
-    <script src="app.js"></script>
+    <!-- CHART -->
+    <div class="chart-section">
+        <div class="chart-title">App Usage Breakdown</div>
+        <div class="chart-wrap">
+            <canvas id="usageChart"></canvas>
+        </div>
+    </div>
+
+    <!-- FILTER BAR -->
+    <div class="section-label">Apps</div>
+    <div class="filter-bar">
+        <button class="filter-pill active" data-filter="default" onclick="setFilter('default', this)">
+            <span class="pill-icon">📋</span> All Apps
+        </button>
+        <button class="filter-pill" data-filter="latest" onclick="setFilter('latest', this)">
+            <span class="pill-icon">🕐</span> Latest Used
+        </button>
+        <button class="filter-pill" data-filter="max" onclick="setFilter('max', this)">
+            <span class="pill-icon">🔥</span> Max Usage
+        </button>
+    </div>
+
+    <!-- APP LIST -->
+    <div id="app-list">
+        <div class="empty-state">
+            <span class="icon">⏳</span>
+            Loading app usage data…
+        </div>
+    </div>
+
+    <!-- LOGOUT -->
+    <div class="logout-bar">
+        <button class="logout-btn" onclick="logout()">Logout</button>
+    </div>
+
+</div>
+
+<script src="app.js"></script>
+
 </body>
 </html>
