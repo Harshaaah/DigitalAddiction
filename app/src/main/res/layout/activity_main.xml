@@ -72,6 +72,33 @@
             android:textSize="15sp"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"/>
+        <!-- 2. DAY & NIGHT USAGE (Added directly below Total) -->
+        <LinearLayout
+            android:orientation="horizontal"
+            android:gravity="center"
+            android:background="#22000000"
+            android:padding="8dp"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp">
+
+            <TextView
+                android:id="@+id/tvDayTime"
+                android:text="☀️ Day: 0h 0m"
+                android:textColor="#FFFFFF"
+                android:textSize="14sp"
+                android:layout_marginEnd="20dp"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"/>
+
+            <TextView
+                android:id="@+id/tvNightTime"
+                android:text="🌙 Night: 0h 0m"
+                android:textColor="#FFFFFF"
+                android:textSize="14sp"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"/>
+        </LinearLayout>
         <!-- Add below the Logout Button -->
         <Button
             android:id="@+id/btnWebDashboard"

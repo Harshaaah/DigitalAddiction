@@ -60,10 +60,13 @@ public class MainActivity extends AppCompatActivity {
     private TextView tvUserEmail, tvRiskLevel, tvTotalTime;
     private LinearLayout layoutRisk;
     private Button btnLogout, btnParentSettings, btnWebDashboard;
+    private TextView tvDayTime, tvNightTime;
 //    private PieChart pieChart;
 
     // Logic State
     private long totalDailyUsage = 0;
+    private long totalDayUsage = 0;          // <--- ADD THIS
+    private long totalNightUsage = 0;        // <--- ADD THIS
     private RiskAnalyzer.RiskLevel currentRisk = RiskAnalyzer.RiskLevel.LOW;
 
     // --- FIX: Variable to store the Real Parent PIN ---
@@ -122,6 +125,8 @@ public class MainActivity extends AppCompatActivity {
         btnLogout = findViewById(R.id.btnLogout);
         btnParentSettings = findViewById(R.id.btnParentSettings);
         btnWebDashboard = findViewById(R.id.btnWebDashboard);
+        tvDayTime = findViewById(R.id.tvDayTime);     // <--- ADD THIS
+        tvNightTime = findViewById(R.id.tvNightTime); // <--- ADD THIS
 //        pieChart = findViewById(R.id.usagePieChart); // Make sure you added this in XML
 
         tvUserEmail.setText("Account: " + currentUser.getEmail());
@@ -304,18 +309,27 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void updateRiskUI() {
+        // Format Total
         long hours = totalDailyUsage / (1000 * 60 * 60);
         long minutes = (totalDailyUsage / 1000 / 60) % 60;
 
-        // --- FIX: Use Weighted Score for Color, but Real Time for Text ---
+        // Format Day
+        long dayHrs = totalDayUsage / (1000 * 60 * 60);
+        long dayMins = (totalDayUsage / 1000 / 60) % 60;
+
+        // Format Night
+        long nightHrs = totalNightUsage / (1000 * 60 * 60);
+        long nightMins = (totalNightUsage / 1000 / 60) % 60;
+
         currentRisk = RiskAnalyzer.calculateRisk((long) weightedDailyUsage);
 
         runOnUiThread(() -> {
-            // Text shows REAL time
-            tvTotalTime.setText(hours + "h " + minutes + "m used today");
-
-            // Text shows Risk Level (might be SEVERE even if time is low)
+            tvTotalTime.setText("Total: " + hours + "h " + minutes + "m");
             tvRiskLevel.setText(currentRisk.toString());
+
+            // --- SET THE NEW TEXT VIEWS ---
+            tvDayTime.setText("☀️ Day: " + dayHrs + "h " + dayMins + "m");
+            tvNightTime.setText("🌙 Night: " + nightHrs + "h " + nightMins + "m");
 
             // Color follows the Weighted Risk
             switch (currentRisk) {
