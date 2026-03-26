@@ -231,8 +231,10 @@ public class MainActivity extends AppCompatActivity {
         Map<String, Long> openEvents = new HashMap<>();
         PackageManager pm = getPackageManager();
 
-        // Reset Weighted Score for UI Calculation
+        // 1. MUST RESET ALL VARIABLES TO 0 BEFORE CALCULATING
         weightedDailyUsage = 0;
+        totalDayUsage = 0;      // <--- Resets Day bucket
+        totalNightUsage = 0;    // <--- Resets Night bucket
 
         UsageEvents events = usm.queryEvents(startTime, endTime);
         UsageEvents.Event event = new UsageEvents.Event();
@@ -251,13 +253,15 @@ public class MainActivity extends AppCompatActivity {
                     long start = openEvents.get(pkg);
                     long duration = event.getTimeStamp() - start;
 
-                    // --- WEIGHTED LOGIC FOR UI COLOR ---
-                    if (isTimestampNight(start)) {
-                        weightedDailyUsage += (duration * 2.5); // Night Multiplier
+                    // --- THE FIX: ADD TO THE CORRECT BUCKET ---
+                    if (RiskAnalyzer.isTimestampNight(start)) {
+                        weightedDailyUsage += (duration * 2.5); // Weight for Risk Color
+                        totalNightUsage += duration;            // Add physical time to Night
                     } else {
-                        weightedDailyUsage += duration;
+                        weightedDailyUsage += duration;         // Standard weight
+                        totalDayUsage += duration;              // Add physical time to Day
                     }
-                    // -----------------------------------
+                    // ------------------------------------------
 
                     long currentTotal = durationMap.getOrDefault(pkg, 0L);
                     durationMap.put(pkg, currentTotal + duration);
@@ -266,17 +270,21 @@ public class MainActivity extends AppCompatActivity {
             }
         }
 
-        // Handle Currently Open Apps
+        // Handle Currently Open Apps (The app you are looking at right now)
         for (Map.Entry<String, Long> entry : openEvents.entrySet()) {
             String pkg = entry.getKey();
             long start = entry.getValue();
             long duration = endTime - start;
 
-            if (isTimestampNight(start)) {
+            // --- THE FIX: SPLIT LOGIC FOR CURRENTLY OPEN APPS ---
+            if (RiskAnalyzer.isTimestampNight(start)) {
                 weightedDailyUsage += (duration * 2.5);
+                totalNightUsage += duration;             // <--- Adds live time to Night
             } else {
                 weightedDailyUsage += duration;
+                totalDayUsage += duration;               // <--- Adds live time to Day
             }
+            // ----------------------------------------------------
 
             long currentTotal = durationMap.getOrDefault(pkg, 0L);
             durationMap.put(pkg, currentTotal + duration);
@@ -284,6 +292,8 @@ public class MainActivity extends AppCompatActivity {
 
         return durationMap;
     }
+
+
 
     // Don't forget the helper!
     private boolean isTimestampNight(long timestamp) {
